@@ -15,7 +15,6 @@ from detectron2.utils.logger import setup_logger
 from detectron2.utils.visualizer import Visualizer
 from detectron2_ros.msg import Result
 from sensor_msgs.msg import Image, RegionOfInterest
-from sklearn.decomposition import PCA
 
 
 class Detectron2node(object):
@@ -65,69 +64,23 @@ class Detectron2node(object):
                 outputs = self.predictor(np_image)
                 # print(outputs)
                 result = outputs["instances"].to("cpu")
-                result_msg, sa_points_all = self.getResult(result)
+                # print(result['pred_masks'].shape)
+                result_msg = self.getResult(result)
+                
+
 
                 self._result_pub.publish(result_msg)
 
                 # Visualize results
                 if self._visualization:
-                    scale = 1.2
-                    v = Visualizer(np_image[:, :, ::-1], MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]), scale=scale)
-
-                    # temp output
-                    _temp_output = outputs["instances"].to("cpu")
-                    # _class_ids = _temp_output.pred_classes if _temp_output.has("pred_classes") else None
-                    # _names = np.array(self._class_names)[_class_ids.numpy()]
-
-                    # for kkk, _name in enumerate(_names):
-                    #     if _name == 'toilet':
-                    #         print(_temp_output.pred_classes[_class_ids.numpy()[kkk]])
-                    #         _temp_output.pred_classes[_class_ids.numpy()[kkk]] = 'tofu'
-                    #     if _name == 'person':
-                    #         print(_temp_output.pred_classes[_class_ids.numpy()[kkk]])
-                    #         _temp_output.pred_classes[_class_ids.numpy()[kkk]] = 'tofu'
-
-                        
-                    v = v.draw_instance_predictions(_temp_output)
+                    v = Visualizer(np_image[:, :, ::-1], MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]), scale=1.2)
+                    v = v.draw_instance_predictions(outputs["instances"].to("cpu"))
                     img = v.get_image()[:, :, ::-1]
-                    img2 = np.ascontiguousarray(img)
-                    # add grasp
-                    if len(sa_points_all) != 0:
-                        for sa_points in sa_points_all:
-                            cv.line(img2,(int(sa_points[1]*scale),int(sa_points[0]*scale)),(int(sa_points[3]*scale),int(sa_points[2]*scale)),(0,0,255),5)
-                            cv.circle(img2,(int(sa_points[5]*scale),int(sa_points[4]*scale)),10,(0,255,255),-1)
 
-                    image_msg = self._bridge.cv2_to_imgmsg(img2)
+                    image_msg = self._bridge.cv2_to_imgmsg(img)
                     self._vis_pub.publish(image_msg)
 
             rate.sleep()
-
-    def smallest_axis(self, mask):
-        mask_xy = np.argwhere(mask != 0)
-        center = mask_xy.mean(axis=0)
-
-        # run pca
-        pca = PCA(n_components=2)
-        pca.fit(mask_xy)
-        # choose smallest component
-        comp = pca.components_[1]
-        var = pca.explained_variance_[1]
-        comp = comp*var*0.1
-        x1 = center[0] - comp[0]
-        y1 = center[1] - comp[1]
-
-        x2 = comp[0] + center[0]
-        y2 = comp[1] + center[1]
-
-        # calcualte angle
-        angle = np.arctan2(comp[1], comp[0]) + np.pi/2
-        if angle >= np.pi:
-            angle = angle-np.pi
-        elif angle <= -np.pi:
-            angle = angle+np.pi
-
-        
-        return x1,y1, x2, y2, center[0], center[1], angle
 
     def getResult(self, predictions):
 
@@ -138,36 +91,15 @@ class Detectron2node(object):
         else:
             return
 
-
         result_msg = Result()
         result_msg.header = self._header
         result_msg.class_ids = predictions.pred_classes if predictions.has("pred_classes") else None
         result_msg.class_names = np.array(self._class_names)[result_msg.class_ids.numpy()]
-
-        # # replace toilet to tofu
-        # _temp = np.array(self._class_names)[result_msg.class_ids.numpy()]
-        # for i, nnn in enumerate(result_msg.class_names):
-        #     if nnn == 'toilet':
-        #         result_msg.class_names[i] = 'tofu'
-        #     elif nnn == 'person':
-        #         result_msg.class_names[i] = 'tofu'
-
-
         result_msg.scores = predictions.scores if predictions.has("scores") else None
-
-        sa_points_all = list()
 
         for i, (x1, y1, x2, y2) in enumerate(boxes):
             mask = np.zeros(masks[i].shape, dtype="uint8")
             mask[masks[i, :, :]]=255
-
-            # do PCA
-            #if result_msg.class_names[i] == 'tv':
-            sa_points = self.smallest_axis(mask)
-            print(result_msg.class_names[i], sa_points[-1]*180/3.14)
-            sa_points_all.append(sa_points)
-
-
             mask = self._bridge.cv2_to_imgmsg(mask)
             result_msg.masks.append(mask)
 
@@ -178,7 +110,7 @@ class Detectron2node(object):
             box.width = np.uint32(x2 - x1)
             result_msg.boxes.append(box)
 
-        return result_msg, sa_points_all
+        return result_msg
 
     def convert_to_cv_image(self, image_msg):
 
