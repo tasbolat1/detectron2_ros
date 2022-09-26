@@ -43,7 +43,6 @@ class Detectron2node(object):
         rospy.logwarn("Initialized")
 
     def run(self):
-
         rate = rospy.Rate(100)
         while not rospy.is_shutdown():
             if self._msg_lock.acquire(False):
@@ -94,8 +93,20 @@ class Detectron2node(object):
                     # add grasp
                     if len(sa_points_all) != 0:
                         for sa_points in sa_points_all:
-                            cv.line(img2,(int(sa_points[1]*scale),int(sa_points[0]*scale)),(int(sa_points[3]*scale),int(sa_points[2]*scale)),(0,0,255),5)
-                            cv.circle(img2,(int(sa_points[5]*scale),int(sa_points[4]*scale)),10,(0,255,255),-1)
+                            cv.line(
+                                img2,
+                                (int(sa_points[1] * scale), int(sa_points[0] * scale)),
+                                (int(sa_points[3] * scale), int(sa_points[2] * scale)),
+                                (0, 0, 255),
+                                5
+                            )
+                            cv.circle(
+                                img2,
+                                (int(sa_points[5] * scale), int(sa_points[4] * scale)),
+                                10,
+                                (0, 255, 255),
+                                -1
+                            )
 
                     image_msg = self._bridge.cv2_to_imgmsg(img2)
                     self._vis_pub.publish(image_msg)
@@ -127,7 +138,7 @@ class Detectron2node(object):
             angle = angle+np.pi
 
         
-        return x1,y1, x2, y2, center[0], center[1], angle
+        return x1, y1, x2, y2, center[0], center[1], angle
 
     def getResult(self, predictions):
 
