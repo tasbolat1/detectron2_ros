@@ -9,6 +9,8 @@ from typing import Tuple
 import cv2 as cv
 import numpy as np
 import rospy
+from tf import TransformListener
+import geometry_msgs
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog
 from cv_bridge import CvBridge, CvBridgeError
@@ -42,6 +44,8 @@ class Detectron2node(object):
         self._result_pub = rospy.Publisher('~result', Result, queue_size=1)
         self._vis_pub = rospy.Publisher('~visualization', Image, queue_size=1)
         self._sub = rospy.Subscriber(self.load_param('~input'), Image, self.callback_image, queue_size=1)
+        self.tf_listener_ = TransformListener()
+        #self._depth_sub = rospy.Subscriber('/camera/aligned_depth_to_color/image_raw', Image, self.callback_depth_image, queue_size=1)
         self.start_time = time.time()
         rospy.logwarn("Initialized")
 
@@ -204,6 +208,25 @@ class Detectron2node(object):
         Y = (coord[1] - cy) / fy * depth
         return X, Y, depth, angle, 0, 0
 
+    def transform_pose_to_world(self, x, y, z, qx, qy, qz, qw):
+        source_frame = "/camera_link"
+        target_frame = "/world"
+        if self.tf_listener_.frameExists(target_frame) and self.tf_listener_.frameExists(source_frame):
+            t = self.tf_listener_.getLatestCommonTime(target_frame, source_frame)
+            pose_msg = geometry_msgs.msg.PoseStamped()
+            pose_msg.header.frame_id = source_frame
+            pose_msg.pose.position.x = x
+            pose_msg.pose.position.y = y
+            pose_msg.pose.position.z = z
+            pose_msg.orientation.x = qx
+            pose_msg.orientation.y = qy
+            pose_msg.orientation.z = qz
+            pose_msg.orientation.w = qw
+
+            pose_from_base = self.tf_listener_.transformPose(target_frame, pose_msg)
+            return pose_from_base
+            
+
     def convert_to_cv_image(self, image_msg):
         if image_msg is None:
             return None
@@ -242,6 +265,13 @@ class Detectron2node(object):
             self._last_msg = msg
             self._header = msg.header
             self._msg_lock.release()
+
+    # def callback_depth_image(self, msg):
+    #     rospy.logdebug("Get a depth image")
+    #     if self._msg_lock.acquire(False):
+    #         self._last_depth_msg = msg
+    #         self._header = msg.header
+    #         self._msg_lock.release()
 
     @staticmethod
     def load_param(param, default=None):
