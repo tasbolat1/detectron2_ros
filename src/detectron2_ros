@@ -1,6 +1,4 @@
 #!/usr/bin/env python
-from email.mime import image
-from os import defpath
 import sys
 import threading
 import time
@@ -32,6 +30,7 @@ class Detectron2node(object):
         self._bridge = CvBridge()
         self._last_msg = None
         self._msg_lock = threading.Lock()
+        self._depth_msg_lock = threading.Lock()
         self._image_counter = 0
 
         self.cfg = get_cfg()
@@ -52,7 +51,12 @@ class Detectron2node(object):
             self.load_param("~input"), Image, self.callback_image, queue_size=1
         )
         self.tf_listener_ = TransformListener()
-        # self._depth_sub = rospy.Subscriber('/camera/aligned_depth_to_color/image_raw', Image, self.callback_depth_image, queue_size=1)
+        self._depth_sub = rospy.Subscriber(
+            "/camera/aligned_depth_to_color/image_raw",
+            Image,
+            self.callback_depth_image,
+            queue_size=1,
+        )
         self.start_time = time.time()
         rospy.logwarn("Initialized")
 
@@ -286,12 +290,12 @@ class Detectron2node(object):
             self._header = msg.header
             self._msg_lock.release()
 
-    # def callback_depth_image(self, msg):
-    #     rospy.logdebug("Get a depth image")
-    #     if self._msg_lock.acquire(False):
-    #         self._last_depth_msg = msg
-    #         self._header = msg.header
-    #         self._msg_lock.release()
+    def callback_depth_image(self, msg):
+        rospy.logdebug("Get a depth image")
+        if self._depth_msg_lock.acquire(False):
+            self._last_depth_msg = msg
+            self._depth_header = msg.header
+            self._depth_msg_lock.release()
 
     @staticmethod
     def load_param(param, default=None):

@@ -2,13 +2,21 @@
   <arg name="detectron_dir" default="/home/gpupc3/catkin_vision/detectron2" />
   <arg name="input" default="ViMantic/ToCNN" />
   <arg name="detection_threshold" default="0.5" />
-  
+
   <arg name="config" default="$(arg detectron_dir)/configs/COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml" />
   <arg name="model" default="detectron2://COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x/137849600/model_final_f10217.pkl" />
 
   <arg name="visualization" default="true" />
 
-  <node name="detectron2_ros"  pkg="detectron2_ros" type="detectron2_ros" output="screen" >
+  <node pkg="nodelet" type="nodelet" name="standalone_nodelet" args="manager"/>
+
+  <node pkg="nodelet" type="nodelet" name="convert_depth_to_m" args="load depth_image_proc/convert_metric standalone_nodelet">
+    <remap from="image_raw" to="$(arg namespace)/depth/image_rect_raw"/>
+    <remap from="image" to="$(arg namespace)/depth/image_meters"/>
+  </node>
+
+
+  <node name="detectron2_ros" pkg="detectron2_ros" type="detectron2_ros" output="screen">
     <param name="input" value="$(arg input)" />
     <param name="detection_threshold" value="$(arg detection_threshold)" />
     <param name="config" value="$(arg config)" />
