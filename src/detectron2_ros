@@ -14,6 +14,7 @@ import geometry_msgs
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog
 from cv_bridge import CvBridge, CvBridgeError
+
 # import some common detectron2 utilities
 from detectron2.engine import DefaultPredictor
 from detectron2.utils.logger import setup_logger
@@ -34,18 +35,24 @@ class Detectron2node(object):
         self._image_counter = 0
 
         self.cfg = get_cfg()
-        self.cfg.merge_from_file(self.load_param('~config'))
-        self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = self.load_param('~detection_threshold') # set threshold for this model
-        self.cfg.MODEL.WEIGHTS = self.load_param('~model')
+        self.cfg.merge_from_file(self.load_param("~config"))
+        self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = self.load_param(
+            "~detection_threshold"
+        )  # set threshold for this model
+        self.cfg.MODEL.WEIGHTS = self.load_param("~model")
         self.predictor = DefaultPredictor(self.cfg)
-        self._class_names = MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]).get("thing_classes", None)
+        self._class_names = MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]).get(
+            "thing_classes", None
+        )
 
-        self._visualization = self.load_param('~visualization',True)
-        self._result_pub = rospy.Publisher('~result', Result, queue_size=1)
-        self._vis_pub = rospy.Publisher('~visualization', Image, queue_size=1)
-        self._sub = rospy.Subscriber(self.load_param('~input'), Image, self.callback_image, queue_size=1)
+        self._visualization = self.load_param("~visualization", True)
+        self._result_pub = rospy.Publisher("~result", Result, queue_size=1)
+        self._vis_pub = rospy.Publisher("~visualization", Image, queue_size=1)
+        self._sub = rospy.Subscriber(
+            self.load_param("~input"), Image, self.callback_image, queue_size=1
+        )
         self.tf_listener_ = TransformListener()
-        #self._depth_sub = rospy.Subscriber('/camera/aligned_depth_to_color/image_raw', Image, self.callback_depth_image, queue_size=1)
+        # self._depth_sub = rospy.Subscriber('/camera/aligned_depth_to_color/image_raw', Image, self.callback_depth_image, queue_size=1)
         self.start_time = time.time()
         rospy.logwarn("Initialized")
 
@@ -63,8 +70,10 @@ class Detectron2node(object):
             if img_msg is not None:
                 self._image_counter = self._image_counter + 1
                 if (self._image_counter % 11) == 10:
-                    rospy.loginfo("Images detected per second=%.2f",
-                                  float(self._image_counter) / (time.time() - self.start_time))
+                    rospy.loginfo(
+                        "Images detected per second=%.2f",
+                        float(self._image_counter) / (time.time() - self.start_time),
+                    )
 
                 np_image = self.convert_to_cv_image(img_msg)
 
@@ -78,7 +87,11 @@ class Detectron2node(object):
                 # Visualize results
                 if self._visualization:
                     scale = 1.2
-                    v = Visualizer(np_image[:, :, ::-1], MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]), scale=scale)
+                    v = Visualizer(
+                        np_image[:, :, ::-1],
+                        MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]),
+                        scale=scale,
+                    )
 
                     # temp output
                     _temp_output = outputs["instances"].to("cpu")
@@ -93,7 +106,6 @@ class Detectron2node(object):
                     #         print(_temp_output.pred_classes[_class_ids.numpy()[kkk]])
                     #         _temp_output.pred_classes[_class_ids.numpy()[kkk]] = 'tofu'
 
-                        
                     v = v.draw_instance_predictions(_temp_output)
                     img = v.get_image()[:, :, ::-1]
                     img2 = np.ascontiguousarray(img)
@@ -105,18 +117,22 @@ class Detectron2node(object):
                                 (int(sa_points[1] * scale), int(sa_points[0] * scale)),
                                 (int(sa_points[3] * scale), int(sa_points[2] * scale)),
                                 (0, 0, 255),
-                                5
+                                5,
                             )
-                            object_center =  (int(sa_points[5]), int(sa_points[4]))
+                            object_center = (int(sa_points[5]), int(sa_points[4]))
                             cv.circle(
                                 img2,
                                 (int(sa_points[5] * scale), int(sa_points[4] * scale)),
                                 10,
                                 (0, 255, 255),
-                                -1
+                                -1,
                             )
-                            depth = None # TODO
-                            print(self.get_pose_from_img_coordinate(depth, object_center, sa_points[6]))
+                            depth = None  # TODO
+                            print(
+                                self.get_pose_from_img_coordinate(
+                                    depth, object_center, sa_points[6]
+                                )
+                            )
 
                     image_msg = self._bridge.cv2_to_imgmsg(img2)
                     self._vis_pub.publish(image_msg)
@@ -133,7 +149,7 @@ class Detectron2node(object):
         # choose smallest component
         comp = pca.components_[1]
         var = pca.explained_variance_[1]
-        comp = comp*var*0.1
+        comp = comp * var * 0.1
         x1 = center[0] - comp[0]
         y1 = center[1] - comp[1]
 
@@ -141,13 +157,12 @@ class Detectron2node(object):
         y2 = comp[1] + center[1]
 
         # calcualte angle
-        angle = np.arctan2(comp[1], comp[0]) + np.pi/2
+        angle = np.arctan2(comp[1], comp[0]) + np.pi / 2
         if angle >= np.pi:
-            angle = angle-np.pi
+            angle = angle - np.pi
         elif angle <= -np.pi:
-            angle = angle+np.pi
+            angle = angle + np.pi
 
-        
         return x1, y1, x2, y2, center[0], center[1], angle
 
     def getResult(self, predictions):
@@ -159,11 +174,14 @@ class Detectron2node(object):
         else:
             return
 
-
         result_msg = Result()
         result_msg.header = self._header
-        result_msg.class_ids = predictions.pred_classes if predictions.has("pred_classes") else None
-        result_msg.class_names = np.array(self._class_names)[result_msg.class_ids.numpy()]
+        result_msg.class_ids = (
+            predictions.pred_classes if predictions.has("pred_classes") else None
+        )
+        result_msg.class_names = np.array(self._class_names)[
+            result_msg.class_ids.numpy()
+        ]
 
         # # replace toilet to tofu
         # _temp = np.array(self._class_names)[result_msg.class_ids.numpy()]
@@ -173,21 +191,19 @@ class Detectron2node(object):
         #     elif nnn == 'person':
         #         result_msg.class_names[i] = 'tofu'
 
-
         result_msg.scores = predictions.scores if predictions.has("scores") else None
 
         sa_points_all = list()
 
         for i, (x1, y1, x2, y2) in enumerate(boxes):
             mask = np.zeros(masks[i].shape, dtype="uint8")
-            mask[masks[i, :, :]]=255
+            mask[masks[i, :, :]] = 255
 
             # do PCA
-            #if result_msg.class_names[i] == 'tv':
+            # if result_msg.class_names[i] == 'tv':
             sa_points = self.smallest_axis(mask)
-            print(result_msg.class_names[i], sa_points[-1]*180/3.14)
+            print(result_msg.class_names[i], sa_points[-1] * 180 / 3.14)
             sa_points_all.append(sa_points)
-
 
             mask = self._bridge.cv2_to_imgmsg(mask)
             result_msg.masks.append(mask)
@@ -211,7 +227,9 @@ class Detectron2node(object):
     def transform_pose_to_world(self, x, y, z, qx, qy, qz, qw):
         source_frame = "/camera_link"
         target_frame = "/world"
-        if self.tf_listener_.frameExists(target_frame) and self.tf_listener_.frameExists(source_frame):
+        if self.tf_listener_.frameExists(
+            target_frame
+        ) and self.tf_listener_.frameExists(source_frame):
             t = self.tf_listener_.getLatestCommonTime(target_frame, source_frame)
             pose_msg = geometry_msgs.msg.PoseStamped()
             pose_msg.header.frame_id = source_frame
@@ -225,7 +243,6 @@ class Detectron2node(object):
 
             pose_from_base = self.tf_listener_.transformPose(target_frame, pose_msg)
             return pose_from_base
-            
 
     def convert_to_cv_image(self, image_msg):
         if image_msg is None:
@@ -236,24 +253,27 @@ class Detectron2node(object):
         channels = int(len(image_msg.data) / (self._width * self._height))
 
         encoding = None
-        if image_msg.encoding.lower() in ['rgb8', 'bgr8']:
+        if image_msg.encoding.lower() in ["rgb8", "bgr8"]:
             encoding = np.uint8
-        elif image_msg.encoding.lower() == 'mono8':
+        elif image_msg.encoding.lower() == "mono8":
             encoding = np.uint8
-        elif image_msg.encoding.lower() == '16uc1':
+        elif image_msg.encoding.lower() == "16uc1":
             encoding = np.uint16
             channels = 1
-        elif image_msg.encoding.lower() == '32fc1':
+        elif image_msg.encoding.lower() == "32fc1":
             encoding = np.float32
             channels = 1
 
-        cv_img = np.ndarray(shape=(image_msg.height, image_msg.width, channels),
-                            dtype=encoding, buffer=image_msg.data)
+        cv_img = np.ndarray(
+            shape=(image_msg.height, image_msg.width, channels),
+            dtype=encoding,
+            buffer=image_msg.data,
+        )
 
-        if image_msg.encoding.lower() == 'mono8':
+        if image_msg.encoding.lower() == "mono8":
             cv_img = cv.cvtColor(cv_img, cv.COLOR_RGB2GRAY)
-        elif image_msg.encoding.lower() == '16uc1':
-            cv_img = cv_img.astype('int32')
+        elif image_msg.encoding.lower() == "16uc1":
+            cv_img = cv_img.astype("int32")
         else:
             cv_img = cv.cvtColor(cv_img, cv.COLOR_RGB2BGR)
 
@@ -279,10 +299,12 @@ class Detectron2node(object):
         rospy.loginfo("[Detectron2] %s: %s", param, new_param)
         return new_param
 
+
 def main(argv):
-    rospy.init_node('detectron2_ros')
+    rospy.init_node("detectron2_ros")
     node = Detectron2node()
     node.run()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main(sys.argv)
