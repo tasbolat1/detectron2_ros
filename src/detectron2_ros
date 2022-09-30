@@ -7,7 +7,6 @@ from typing import Tuple
 import cv2 as cv
 import numpy as np
 import rospy
-from tf import TransformListener
 import geometry_msgs
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog
@@ -51,7 +50,6 @@ class Detectron2node(object):
         self._sub = rospy.Subscriber(
             self.load_param("~input"), Image, self.callback_image, queue_size=1
         )
-        self.tf_listener_ = TransformListener()
         self._depth_sub = rospy.Subscriber(
             "/camera/aligned_depth_to_color/image_meters",
             Image,
@@ -76,7 +74,7 @@ class Detectron2node(object):
                 rate.sleep()
                 continue
 
-            if img_msg is not None:
+            if img_msg and depth_msg:
                 self._image_counter = self._image_counter + 1
                 if (self._image_counter % 11) == 10:
                     rospy.loginfo(
@@ -242,7 +240,7 @@ class Detectron2node(object):
 
     @staticmethod
     def get_depth_at_point(depth_img, object_center) -> float:
-        return depth_img[object_center[0]][object_center[1]]
+        return depth_img[object_center[1]][object_center[0]]
 
     @staticmethod
     def get_pose_at_img_coordinate(depth, coord: Tuple[int, int], angle: float):
