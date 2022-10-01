@@ -4,10 +4,12 @@ import threading
 import time
 from typing import Tuple
 
+from math import pi
 import cv2 as cv
 import numpy as np
+from scipy.spatial.transform import Rotation
 import rospy
-import geometry_msgs
+from geometry_msgs.msg import PoseStamped
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog
 from cv_bridge import CvBridge, CvBridgeError
@@ -47,6 +49,7 @@ class Detectron2node(object):
         self._visualization = self.load_param("~visualization", True)
         self._result_pub = rospy.Publisher("~result", Result, queue_size=1)
         self._vis_pub = rospy.Publisher("~visualization", Image, queue_size=1)
+        self._grasp_pub = rospy.Publisher("~grasp", PoseStamped, queue_size=1)
         self._sub = rospy.Subscriber(
             self.load_param("~input"), Image, self.callback_image, queue_size=1
         )
@@ -165,7 +168,7 @@ class Detectron2node(object):
         elif angle <= -np.pi:
             angle = angle + np.pi
 
-        return x1, y1, x2, y2, center[0], center[1], angle
+        return x1, y1, x2, y2, center[0], center[1], angle # center[0] = y, center[1] = x
 
     def getResult(self, predictions):
 
@@ -220,15 +223,36 @@ class Detectron2node(object):
         return result_msg, sa_points_all
 
     def publish_grasp(self, sa_points_all, depth_msg) -> None:
+        if not sa_points_all:
+            return
         depth_img = Detectron2node.convert_to_depth_img(depth_msg)
-        for sa_points in sa_points_all:
-            object_center = (int(sa_points[5]), int(sa_points[4]))
-            depth = Detectron2node.get_depth_at_point(depth_img, object_center)
-            print(
-                Detectron2node.get_pose_at_img_coordinate(
-                    depth, object_center, sa_points[6]
-                )
-            )
+        sa_points_all.sort(key=lambda t: Detectron2node.get_depth_at_point(depth_img, 
+            (int(t[5]), int(t[4])))
+        )
+        sa_points = sa_points_all[0]
+
+        object_center = (int(sa_points[5]), int(sa_points[4])) # x, y
+        depth = Detectron2node.get_depth_at_point(depth_img, object_center)
+        if depth == 0:
+            return
+        x, y, z, r, _, _ =  Detectron2node.get_pose_at_img_coordinate(
+            depth, object_center, sa_points[6]
+        )
+        if not x or not y:
+            return
+        grasp_msg = PoseStamped()
+        grasp_msg.header.stamp = rospy.Time.now()
+        grasp_msg.header.frame_id = "camera_color_frame"
+
+        grasp_msg.pose.position.x = x
+        grasp_msg.pose.position.y = y
+        grasp_msg.pose.position.z = z
+        ow, ox, oy, oz = quaternion_from_euler(r % pi, 0, 0)
+        grasp_msg.pose.orientation.w = ow
+        grasp_msg.pose.orientation.x = ox
+        grasp_msg.pose.orientation.y = oy
+        grasp_msg.pose.orientation.z = oz
+        self._grasp_pub.publish(grasp_msg)
 
     @staticmethod
     def convert_to_depth_img(depth_msg):
@@ -244,31 +268,11 @@ class Detectron2node(object):
 
     @staticmethod
     def get_pose_at_img_coordinate(depth, coord: Tuple[int, int], angle: float):
-        fx = fy = 419.0289001464844
-        cx, cy = 425.84820556640625, 235.1192169189453
+        fx = fy = 419.0289001464844 #TODO get from camera info
+        cx, cy = 425.84820556640625 * 1.5, 235.1192169189453 * 1.5
         X = (coord[0] - cx) / fx * depth
         Y = (coord[1] - cy) / fy * depth
-        return X, Y, depth, angle, 0, 0
-
-    def transform_pose_to_world(self, x, y, z, qx, qy, qz, qw):
-        source_frame = "/camera_link"
-        target_frame = "/world"
-        if self.tf_listener_.frameExists(
-            target_frame
-        ) and self.tf_listener_.frameExists(source_frame):
-            t = self.tf_listener_.getLatestCommonTime(target_frame, source_frame)
-            pose_msg = geometry_msgs.msg.PoseStamped()
-            pose_msg.header.frame_id = source_frame
-            pose_msg.pose.position.x = x
-            pose_msg.pose.position.y = y
-            pose_msg.pose.position.z = z
-            pose_msg.orientation.x = qx
-            pose_msg.orientation.y = qy
-            pose_msg.orientation.z = qz
-            pose_msg.orientation.w = qw
-
-            pose_from_base = self.tf_listener_.transformPose(target_frame, pose_msg)
-            return pose_from_base
+        return X/2, Y/2, depth, angle, 0, 0
 
     def convert_to_cv_image(self, image_msg):
         if image_msg is None:
@@ -324,6 +328,10 @@ class Detectron2node(object):
         new_param = rospy.get_param(param, default)
         rospy.loginfo("[Detectron2] %s: %s", param, new_param)
         return new_param
+
+def quaternion_from_euler(r, p, y):
+    rot = Rotation.from_euler('xyz', [r, p, y])
+    return rot.as_quat()
 
 
 def main(argv):
