@@ -233,7 +233,7 @@ class Detectron2node(object):
 
         object_center = (int(sa_points[5]), int(sa_points[4])) # x, y
         depth = Detectron2node.get_depth_at_point(depth_img, object_center)
-        if depth == 0:
+        if depth == 0 or depth == np.nan:
             return
         x, y, z, r, _, _ =  Detectron2node.get_pose_at_img_coordinate(
             depth, object_center, sa_points[6]
@@ -246,8 +246,8 @@ class Detectron2node(object):
 
         grasp_msg.pose.position.x = x
         grasp_msg.pose.position.y = y
-        grasp_msg.pose.position.z = z
-        ow, ox, oy, oz = quaternion_from_euler(r % pi, 0, 0)
+        grasp_msg.pose.position.z = z - 0.25
+        ow, ox, oy, oz = quaternion_from_euler(r, 0, 0)
         grasp_msg.pose.orientation.w = ow
         grasp_msg.pose.orientation.x = ox
         grasp_msg.pose.orientation.y = oy
