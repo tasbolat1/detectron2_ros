@@ -240,10 +240,11 @@ class Detectron2node(object):
         )
         if not x or not y:
             return
-        if r > pi / 4: # make angle acute
-            r = -(pi / 2 - r)
+        if r > pi / 2: # make angle acute
+            r = -(pi - r)
         elif r < -pi / 4:
-            r = pi / 2 + r
+            r = pi + r
+        r += pi
 
         grasp_msg = PoseStamped()
         grasp_msg.header.stamp = rospy.Time.now()
