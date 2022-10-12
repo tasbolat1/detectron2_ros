@@ -3,11 +3,12 @@ import sys
 import threading
 import time
 from typing import Tuple
-
 from math import pi
+
 import cv2 as cv
 import numpy as np
 from scipy.spatial.transform import Rotation
+from sklearn.decomposition import PCA
 import rospy
 from geometry_msgs.msg import PoseStamped
 from detectron2.config import get_cfg
@@ -20,7 +21,6 @@ from detectron2.utils.logger import setup_logger
 from detectron2.utils.visualizer import Visualizer
 from detectron2_ros.msg import Result
 from sensor_msgs.msg import Image, RegionOfInterest
-from sklearn.decomposition import PCA
 
 
 class Detectron2node(object):
@@ -168,7 +168,15 @@ class Detectron2node(object):
         elif angle <= -np.pi:
             angle = angle + np.pi
 
-        return x1, y1, x2, y2, center[0], center[1], angle # center[0] = y, center[1] = x
+        return (
+            x1,
+            y1,
+            x2,
+            y2,
+            center[0],
+            center[1],
+            angle,
+        )  # center[0] = y, center[1] = x
 
     def getResult(self, predictions):
 
@@ -226,21 +234,23 @@ class Detectron2node(object):
         if not sa_points_all:
             return
         depth_img = Detectron2node.convert_to_depth_img(depth_msg)
-        sa_points_all.sort(key=lambda t: Detectron2node.get_depth_at_point(depth_img, 
-            (int(t[5]), int(t[4])))
+        sa_points_all.sort(
+            key=lambda t: Detectron2node.get_depth_at_point(
+                depth_img, (int(t[5]), int(t[4]))
+            )
         )
         sa_points = sa_points_all[0]
 
-        object_center = (int(sa_points[5]), int(sa_points[4])) # x, y
+        object_center = (int(sa_points[5]), int(sa_points[4]))  # x, y
         depth = Detectron2node.get_depth_at_point(depth_img, object_center)
         if depth == 0 or depth == np.nan:
             return
-        x, y, z, r, _, _ =  Detectron2node.get_pose_at_img_coordinate(
+        x, y, z, r, _, _ = Detectron2node.get_pose_at_img_coordinate(
             depth, object_center, sa_points[6]
         )
         if not x or not y:
             return
-        if r > pi / 2: # make angle acute
+        if r > pi / 2:  # make angle acute
             r = -(pi - r)
         elif r < -pi / 4:
             r = pi + r
@@ -274,11 +284,11 @@ class Detectron2node(object):
 
     @staticmethod
     def get_pose_at_img_coordinate(depth, coord: Tuple[int, int], angle: float):
-        fx = fy = 419.0289001464844 #TODO get from camera info
+        fx = fy = 419.0289001464844  # TODO get from camera info
         cx, cy = 425.84820556640625 * 1.5, 235.1192169189453 * 1.5
         X = (coord[0] - cx) / fx * depth
         Y = (coord[1] - cy) / fy * depth
-        return X/2, Y/2, depth, angle, 0, 0
+        return X / 2, Y / 2, depth, angle, 0, 0
 
     def convert_to_cv_image(self, image_msg):
         if image_msg is None:
@@ -335,8 +345,9 @@ class Detectron2node(object):
         rospy.loginfo("[Detectron2] %s: %s", param, new_param)
         return new_param
 
+
 def quaternion_from_euler(r, p, y):
-    rot = Rotation.from_euler('xyz', [r, p, y])
+    rot = Rotation.from_euler("xyz", [r, p, y])
     return rot.as_quat()
 
 
