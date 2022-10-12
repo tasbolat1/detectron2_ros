@@ -29,9 +29,7 @@ class Detectron2node(object):
         setup_logger()
 
         self._bridge = CvBridge()
-        self._last_msg = None
         self._last_depth_msg = None
-        self._msg_lock = threading.Lock()
         self._depth_msg_lock = threading.Lock()
         self._image_counter = 0
 
@@ -40,7 +38,9 @@ class Detectron2node(object):
         self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = self.load_param(
             "~detection_threshold"
         )  # set threshold for this model
-        self.cfg.MODEL.WEIGHTS = self.load_param("~model")
+        self.cfg.MODEL.WEIGHTS = self.load_param(
+            "~model"
+        )  # TODO look into where this predictor is from
         self.predictor = DefaultPredictor(self.cfg)
         self._class_names = MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]).get(
             "thing_classes", None
@@ -50,9 +50,9 @@ class Detectron2node(object):
         self._result_pub = rospy.Publisher("~result", Result, queue_size=1)
         self._vis_pub = rospy.Publisher("~visualization", Image, queue_size=1)
         self._grasp_pub = rospy.Publisher("~grasp", PoseStamped, queue_size=1)
-        self._sub = rospy.Subscriber(
-            self.load_param("~input"), Image, self.callback_image, queue_size=1
-        )
+        # self._sub = rospy.Subscriber(
+        #     self.load_param("~input"), Image, self.callback_image, queue_size=1
+        # )
         self._depth_sub = rospy.Subscriber(
             "/camera/aligned_depth_to_color/image_meters",
             Image,
@@ -65,19 +65,16 @@ class Detectron2node(object):
     def run(self):
         rate = rospy.Rate(100)
         while not rospy.is_shutdown():
-            if self._msg_lock.acquire(False) and self._depth_msg_lock.acquire(False):
-                img_msg = self._last_msg
-                self._last_msg = None
+            if self._depth_msg_lock.acquire(False):
                 depth_msg = self._last_depth_msg
                 self._last_depth_msg = None
-                self._msg_lock.release()
                 self._depth_msg_lock.release()
 
             else:
                 rate.sleep()
                 continue
 
-            if img_msg and depth_msg:
+            if depth_msg:
                 self._image_counter = self._image_counter + 1
                 if (self._image_counter % 11) == 10:
                     rospy.loginfo(
@@ -85,10 +82,10 @@ class Detectron2node(object):
                         float(self._image_counter) / (time.time() - self.start_time),
                     )
 
-                np_image = self.convert_to_cv_image(img_msg)
+                depth_img = Detectron2node.convert_to_depth_img(depth_msg)
 
-                outputs = self.predictor(np_image)
-                # print(outputs)
+                outputs = self.segmap_from_depthmap(depth_img)
+                print(outputs)
                 result = outputs["instances"].to("cpu")
                 result_msg, sa_points_all = self.getResult(result)
 
@@ -99,7 +96,7 @@ class Detectron2node(object):
                 if self._visualization:
                     scale = 1.2
                     v = Visualizer(
-                        np_image[:, :, ::-1],
+                        depth_img[:, :, ::-1],  # TODO check shape
                         MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]),
                         scale=scale,
                     )
@@ -119,6 +116,7 @@ class Detectron2node(object):
 
                     v = v.draw_instance_predictions(_temp_output)
                     img = v.get_image()[:, :, ::-1]
+                    # TODO need to colormap depth img from meters to rgb
                     img2 = np.ascontiguousarray(img)
                     # add grasp
                     if len(sa_points_all) != 0:
@@ -143,6 +141,9 @@ class Detectron2node(object):
                     self._vis_pub.publish(image_msg)
 
             rate.sleep()
+
+    def segmap_from_depthmap(self, depth_img):
+        pass
 
     def smallest_axis(self, mask):
         mask_xy = np.argwhere(mask != 0)
