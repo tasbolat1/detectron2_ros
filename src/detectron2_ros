@@ -84,10 +84,9 @@ class Detectron2node(object):
 
                 depth_img = Detectron2node.convert_to_depth_img(depth_msg)
 
-                outputs = self.segmap_from_depthmap(depth_img)
-                print(outputs)
-                result = outputs["instances"].to("cpu")
-                result_msg, sa_points_all = self.getResult(result)
+                segmap = self.segmap_from_depthmap(depth_img)  # TODO
+                box = Detectron2node.draw_box_around_segmap(segmap)  # TODO
+                result_msg, sa_points_all = self.get_result_msg([box], [segmap])
 
                 self.publish_grasp(sa_points_all, depth_msg)
                 self._result_pub.publish(result_msg)
@@ -95,14 +94,15 @@ class Detectron2node(object):
                 # Visualize results
                 if self._visualization:
                     scale = 1.2
+                    img = Detectron2node.colormap_depth(depth_img)  # TODO
                     v = Visualizer(
-                        depth_img[:, :, ::-1],  # TODO check shape
+                        img[:, :, ::-1],
                         MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]),
                         scale=scale,
                     )
 
                     # temp output
-                    _temp_output = outputs["instances"].to("cpu")
+                    # _temp_output = outputs["instances"].to("cpu") # removed
                     # _class_ids = _temp_output.pred_classes if _temp_output.has("pred_classes") else None
                     # _names = np.array(self._class_names)[_class_ids.numpy()]
 
@@ -114,9 +114,8 @@ class Detectron2node(object):
                     #         print(_temp_output.pred_classes[_class_ids.numpy()[kkk]])
                     #         _temp_output.pred_classes[_class_ids.numpy()[kkk]] = 'tofu'
 
-                    v = v.draw_instance_predictions(_temp_output)
-                    img = v.get_image()[:, :, ::-1]
-                    # TODO need to colormap depth img from meters to rgb
+                    # v = v.draw_instance_predictions(_temp_output) # removed
+                    img = v.get_image()[:, :, ::-1]  # TODO check this after above line removed
                     img2 = np.ascontiguousarray(img)
                     # add grasp
                     if len(sa_points_all) != 0:
@@ -143,6 +142,15 @@ class Detectron2node(object):
             rate.sleep()
 
     def segmap_from_depthmap(self, depth_img):
+        pass
+
+    @staticmethod
+    def draw_box_around_segmap(segmaps):
+        pass
+
+    @staticmethod
+    def colormap_depth(depth_img):
+        # TODO need to colormap depth img from meters to rgb
         pass
 
     def smallest_axis(self, mask):
@@ -179,23 +187,9 @@ class Detectron2node(object):
             angle,
         )  # center[0] = y, center[1] = x
 
-    def getResult(self, predictions):
-
-        boxes = predictions.pred_boxes if predictions.has("pred_boxes") else None
-
-        if predictions.has("pred_masks"):
-            masks = np.asarray(predictions.pred_masks)
-        else:
-            return
-
+    def get_result_msg(self, boxes, masks):
         result_msg = Result()
         result_msg.header = self._header
-        result_msg.class_ids = (
-            predictions.pred_classes if predictions.has("pred_classes") else None
-        )
-        result_msg.class_names = np.array(self._class_names)[
-            result_msg.class_ids.numpy()
-        ]
 
         # # replace toilet to tofu
         # _temp = np.array(self._class_names)[result_msg.class_ids.numpy()]
@@ -205,18 +199,16 @@ class Detectron2node(object):
         #     elif nnn == 'person':
         #         result_msg.class_names[i] = 'tofu'
 
-        result_msg.scores = predictions.scores if predictions.has("scores") else None
-
         sa_points_all = list()
 
         for i, (x1, y1, x2, y2) in enumerate(boxes):
             mask = np.zeros(masks[i].shape, dtype="uint8")
-            mask[masks[i, :, :]] = 255
+            mask[masks[i][:, :]] = 255
 
             # do PCA
             # if result_msg.class_names[i] == 'tv':
             sa_points = self.smallest_axis(mask)
-            print(result_msg.class_names[i], sa_points[-1] * 180 / 3.14)
+            print(sa_points[-1] * 180 / 3.14)
             sa_points_all.append(sa_points)
 
             mask = self._bridge.cv2_to_imgmsg(mask)
