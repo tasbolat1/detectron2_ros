@@ -33,18 +33,12 @@ class Detectron2node(object):
         self._depth_msg_lock = threading.Lock()
         self._image_counter = 0
 
-        self.cfg = get_cfg()
+        self.cfg = get_cfg()  # TODO find a way to remove this
         self.cfg.merge_from_file(self.load_param("~config"))
         self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = self.load_param(
             "~detection_threshold"
         )  # set threshold for this model
-        self.cfg.MODEL.WEIGHTS = self.load_param(
-            "~model"
-        )  # TODO look into where this predictor is from
-        self.predictor = DefaultPredictor(self.cfg)
-        self._class_names = MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]).get(
-            "thing_classes", None
-        )
+        self.cfg.MODEL.WEIGHTS = self.load_param("~model")
 
         self._visualization = self.load_param("~visualization", True)
         self._result_pub = rospy.Publisher("~result", Result, queue_size=1)
@@ -84,17 +78,19 @@ class Detectron2node(object):
 
                 depth_img = Detectron2node.convert_to_depth_img(depth_msg)
 
-                segmap = self.segmap_from_depthmap(depth_img)  # TODO
-                box = Detectron2node.draw_box_around_segmap(segmap)  # TODO
-                result_msg, sa_points_all = self.get_result_msg([box], [segmap])
+                segmap = self.segmap_from_depthmap(depth_img)  # TODO test this
+                sa_points = self.smallest_axis(segmap)
+                print(sa_points[-1] * 180 / 3.14)
+                box = Detectron2node.draw_box_around_segmap(segmap)
+                result_msg = self.get_result_msg([box], [segmap])
 
-                self.publish_grasp(sa_points_all, depth_msg)
+                self.publish_grasp(sa_points, depth_msg)
                 self._result_pub.publish(result_msg)
 
                 # Visualize results
                 if self._visualization:
                     scale = 1.2
-                    img = Detectron2node.colormap_depth(depth_img)  # TODO
+                    img = Detectron2node.colormap_depth(depth_img)
                     v = Visualizer(
                         img[:, :, ::-1],
                         MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]),
@@ -115,43 +111,51 @@ class Detectron2node(object):
                     #         _temp_output.pred_classes[_class_ids.numpy()[kkk]] = 'tofu'
 
                     # v = v.draw_instance_predictions(_temp_output) # removed
-                    img = v.get_image()[:, :, ::-1]  # TODO check this after above line removed
-                    img2 = np.ascontiguousarray(img)
+                    img = v.get_image()[
+                        :, :, ::-1
+                    ]  # TODO check this after above line removed
+                    img_contiguous = np.ascontiguousarray(img)
                     # add grasp
-                    if len(sa_points_all) != 0:
-                        for sa_points in sa_points_all:
-                            cv.line(
-                                img2,
-                                (int(sa_points[1] * scale), int(sa_points[0] * scale)),
-                                (int(sa_points[3] * scale), int(sa_points[2] * scale)),
-                                (0, 0, 255),
-                                5,
-                            )
+                    if sa_points:
+                        cv.line(
+                            img_contiguous,
+                            (int(sa_points[1] * scale), int(sa_points[0] * scale)),
+                            (int(sa_points[3] * scale), int(sa_points[2] * scale)),
+                            (0, 0, 255),
+                            5,
+                        )
 
-                            cv.circle(
-                                img2,
-                                (int(sa_points[5] * scale), int(sa_points[4] * scale)),
-                                10,
-                                (0, 255, 255),
-                                -1,
-                            )
+                        cv.circle(
+                            img_contiguous,
+                            (int(sa_points[5] * scale), int(sa_points[4] * scale)),
+                            10,
+                            (0, 255, 255),
+                            -1,
+                        )
 
-                    image_msg = self._bridge.cv2_to_imgmsg(img2)
+                    image_msg = self._bridge.cv2_to_imgmsg(img_contiguous)
                     self._vis_pub.publish(image_msg)
 
             rate.sleep()
 
     def segmap_from_depthmap(self, depth_img):
-        pass
+        min_depth = np.min(depth_img)
+        mask = depth_img > (min_depth + 0.02)  # +2cm
+        return mask.astype(int)  # convert bool to 0 and 1
 
     @staticmethod
-    def draw_box_around_segmap(segmaps):
-        pass
+    def draw_box_around_segmap(segmap):
+        # it seems like the box is only for visualisation, so there is no need to find the tightest bounding box here
+        coords = np.argwhere(segmap)
+        min_y, min_x = np.min(np.argwhere(coords), axis=0)
+        max_y, max_x = np.max(np.argwhere(coords), axis=0)
+        return (min_x, min_y, max_x, max_y)
 
     @staticmethod
     def colormap_depth(depth_img):
-        # TODO need to colormap depth img from meters to rgb
-        pass
+        # map 0-1.5m to rgb
+        single_channel = np.interp(depth_img, [1.5, 0.1], [0, 255])
+        np.array([single_channel, single_channel, single_channel])
 
     def smallest_axis(self, mask):
         mask_xy = np.argwhere(mask != 0)
@@ -170,7 +174,7 @@ class Detectron2node(object):
         x2 = comp[0] + center[0]
         y2 = comp[1] + center[1]
 
-        # calcualte angle
+        # calculate angle
         angle = np.arctan2(comp[1], comp[0]) + np.pi / 2
         if angle >= np.pi:
             angle = angle - np.pi
@@ -199,18 +203,9 @@ class Detectron2node(object):
         #     elif nnn == 'person':
         #         result_msg.class_names[i] = 'tofu'
 
-        sa_points_all = list()
-
         for i, (x1, y1, x2, y2) in enumerate(boxes):
             mask = np.zeros(masks[i].shape, dtype="uint8")
             mask[masks[i][:, :]] = 255
-
-            # do PCA
-            # if result_msg.class_names[i] == 'tv':
-            sa_points = self.smallest_axis(mask)
-            print(sa_points[-1] * 180 / 3.14)
-            sa_points_all.append(sa_points)
-
             mask = self._bridge.cv2_to_imgmsg(mask)
             result_msg.masks.append(mask)
 
@@ -221,19 +216,12 @@ class Detectron2node(object):
             box.width = np.uint32(x2 - x1)
             result_msg.boxes.append(box)
 
-        return result_msg, sa_points_all
+        return result_msg
 
-    def publish_grasp(self, sa_points_all, depth_msg) -> None:
-        if not sa_points_all:
+    def publish_grasp(self, sa_points, depth_msg) -> None:
+        if not sa_points:
             return
         depth_img = Detectron2node.convert_to_depth_img(depth_msg)
-        sa_points_all.sort(
-            key=lambda t: Detectron2node.get_depth_at_point(
-                depth_img, (int(t[5]), int(t[4]))
-            )
-        )
-        sa_points = sa_points_all[0]
-
         object_center = (int(sa_points[5]), int(sa_points[4]))  # x, y
         depth = Detectron2node.get_depth_at_point(depth_img, object_center)
         if depth == 0 or depth == np.nan:
