@@ -77,10 +77,11 @@ class Detectron2node(object):
                     )
 
                 depth_img = Detectron2node.convert_to_depth_img(depth_msg)
+                depth_img = np.nan_to_num(depth_img, nan=np.inf)
 
-                segmap = self.segmap_from_depthmap(depth_img)  # TODO test this
+                segmap = self.segmap_from_depthmap(depth_img)
                 sa_points = self.smallest_axis(segmap)
-                print(sa_points[-1] * 180 / 3.14)
+                print("Angle:", sa_points[-1] * 180 / 3.14)
                 box = Detectron2node.draw_box_around_segmap(segmap)
                 result_msg = self.get_result_msg([box], [segmap])
 
@@ -89,13 +90,15 @@ class Detectron2node(object):
 
                 # Visualize results
                 if self._visualization:
-                    scale = 1.2
+                    scale = 1
                     img = Detectron2node.colormap_depth(depth_img)
-                    v = Visualizer(
-                        img[:, :, ::-1],
-                        MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]),
-                        scale=scale,
-                    )
+                    img = np.moveaxis(img, 0, -1)
+                    img = img.astype(np.uint8)
+                    # v = Visualizer(
+                    #     img[:, :, ::-1].T,
+                    #     MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]),
+                    #     scale=scale,
+                    # )
 
                     # temp output
                     # _temp_output = outputs["instances"].to("cpu") # removed
@@ -110,10 +113,10 @@ class Detectron2node(object):
                     #         print(_temp_output.pred_classes[_class_ids.numpy()[kkk]])
                     #         _temp_output.pred_classes[_class_ids.numpy()[kkk]] = 'tofu'
 
-                    # v = v.draw_instance_predictions(_temp_output) # removed
-                    img = v.get_image()[
-                        :, :, ::-1
-                    ]  # TODO check this after above line removed
+                    # v = v.draw_instance_predictions()
+                    # img = v.get_image()[
+                    #     :, :, ::-1
+                    # ]
                     img_contiguous = np.ascontiguousarray(img)
                     # add grasp
                     if sa_points:
@@ -140,7 +143,8 @@ class Detectron2node(object):
 
     def segmap_from_depthmap(self, depth_img):
         min_depth = np.min(depth_img)
-        mask = depth_img > (min_depth + 0.02)  # +2cm
+        mask = depth_img < (min_depth + 0.02)  # +2cm
+        print("frac ", np.argwhere(mask).shape[0] / (mask.shape[0] * mask.shape[1]))
         return mask.astype(int)  # convert bool to 0 and 1
 
     @staticmethod
@@ -154,8 +158,8 @@ class Detectron2node(object):
     @staticmethod
     def colormap_depth(depth_img):
         # map 0-1.5m to rgb
-        single_channel = np.interp(depth_img, [1.5, 0.1], [0, 255])
-        np.array([single_channel, single_channel, single_channel])
+        single_channel = np.interp(depth_img, [0.1, 1.5], [255, 0])
+        return np.array([single_channel, single_channel, single_channel])
 
     def smallest_axis(self, mask):
         mask_xy = np.argwhere(mask != 0)
@@ -306,18 +310,11 @@ class Detectron2node(object):
 
         return cv_img
 
-    def callback_image(self, msg):
-        rospy.logdebug("Get an image")
-        if self._msg_lock.acquire(False):
-            self._last_msg = msg
-            self._header = msg.header
-            self._msg_lock.release()
-
     def callback_depth_image(self, msg):
         rospy.logdebug("Get a depth image")
         if self._depth_msg_lock.acquire(False):
             self._last_depth_msg = msg
-            self._depth_header = msg.header
+            self._header = msg.header
             self._depth_msg_lock.release()
 
     @staticmethod
