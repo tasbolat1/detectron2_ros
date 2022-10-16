@@ -235,7 +235,7 @@ class Detectron2node(object):
             r = -(pi - r)
         elif r < -pi / 4:
             r = pi + r
-        r += pi
+        r += pi / 2
 
         grasp_msg = PoseStamped()
         grasp_msg.header.stamp = rospy.Time.now()
