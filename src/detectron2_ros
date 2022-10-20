@@ -247,7 +247,7 @@ class Detectron2node(object):
 
         grasp_msg.pose.position.x = x
         grasp_msg.pose.position.y = y
-        grasp_msg.pose.position.z = z - 0.2
+        grasp_msg.pose.position.z = z - 0.17
         ow, ox, oy, oz = quaternion_from_euler(r, 0, 0)
         grasp_msg.pose.orientation.w = ow
         grasp_msg.pose.orientation.x = ox
