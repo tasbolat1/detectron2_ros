@@ -267,7 +267,7 @@ class Detectron2node(object):
             shape=(depth_msg.height, depth_msg.width),
             dtype=np.float32,
             buffer=depth_msg.data,
-        )
+        )[:, :int(11/16 * depth_msg.width)]
 
     @staticmethod
     def get_depth_at_point(depth_img, object_center) -> float:
