@@ -81,16 +81,18 @@ class Detectron2node(object):
                         float(self._image_counter) / (time.time() - self.start_time),
                     )
 
-                depth_img = Detectron2node.convert_to_depth_img(depth_msg)
+                depth_img = self.convert_to_depth_img(depth_msg)
                 depth_img = np.nan_to_num(depth_img, nan=np.inf)
 
                 segmap = self.segmap_from_depthmap(depth_img)
                 sa_points = self.smallest_axis(segmap)
+                if not sa_points:
+                    continue
                 print("Angle:", sa_points[-1] * 180 / 3.14)
                 box = Detectron2node.draw_box_around_segmap(segmap)
                 result_msg = self.get_result_msg([box], [segmap])
 
-                self.publish_grasp(sa_points, depth_msg)
+                self.publish_grasp(sa_points, depth_img)
                 self._result_pub.publish(result_msg)
 
                 # Visualize results
@@ -168,6 +170,8 @@ class Detectron2node(object):
 
     def smallest_axis(self, mask):
         mask_xy = np.argwhere(mask != 0)
+        if len(mask_xy) == 0:
+            return
         center = mask_xy.mean(axis=0)
 
         # run pca
@@ -227,10 +231,9 @@ class Detectron2node(object):
 
         return result_msg
 
-    def publish_grasp(self, sa_points, depth_msg) -> None:
+    def publish_grasp(self, sa_points, depth_img) -> None:
         if not sa_points:
             return
-        depth_img = Detectron2node.convert_to_depth_img(depth_msg)
         object_center = (int(sa_points[5]), int(sa_points[4]))  # x, y
         depth = Detectron2node.get_depth_at_point(depth_img, object_center)
         if depth == 0 or depth == np.nan:
@@ -253,6 +256,7 @@ class Detectron2node(object):
         grasp_msg.pose.position.x = x - 0.015
         grasp_msg.pose.position.y = y + 0.012
         grasp_msg.pose.position.z = z - 0.23
+        print("grasp depth", grasp_msg.pose.position.z)
         ow, ox, oy, oz = quaternion_from_euler(r, 0, 0)
         grasp_msg.pose.orientation.w = ow
         grasp_msg.pose.orientation.x = ox
@@ -261,13 +265,20 @@ class Detectron2node(object):
 
         self._grasp_pub.publish(grasp_msg)
 
-    @staticmethod
-    def convert_to_depth_img(depth_msg):
-        return np.ndarray(
+    def convert_to_depth_img(self, depth_msg):
+        depth_img = np.ndarray(
             shape=(depth_msg.height, depth_msg.width),
             dtype=np.float32,
             buffer=depth_msg.data,
         )[:, :int(11/16 * depth_msg.width)]
+       # self.normalise_angle(depth_img, depth_msg.height, depth_msg.width)
+        return depth_img
+
+    # def normalise_angle(self, depth_img, h, w):
+    #     if not pre
+    #     center = (h / 2, w / 2)
+        
+
 
     @staticmethod
     def get_depth_at_point(depth_img, object_center) -> float:
