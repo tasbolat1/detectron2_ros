@@ -11,6 +11,7 @@ from scipy.spatial.transform import Rotation
 from sklearn.decomposition import PCA
 import rospy
 from geometry_msgs.msg import PoseStamped
+from sensor_msgs.msg import CameraInfo
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog
 from cv_bridge import CvBridge, CvBridgeError
@@ -32,6 +33,10 @@ class Detectron2node(object):
         self._last_depth_msg = None
         self._depth_msg_lock = threading.Lock()
         self._image_counter = 0
+        camera_info_msg = rospy.wait_for_message(
+            "/camera/color/camera_info", CameraInfo
+        )
+        self.cam_K = np.array(camera_info_msg.K).reshape((3, 3))
 
         self.cfg = get_cfg()  # TODO find a way to remove this
         self.cfg.merge_from_file(self.load_param("~config"))
@@ -230,7 +235,7 @@ class Detectron2node(object):
         depth = Detectron2node.get_depth_at_point(depth_img, object_center)
         if depth == 0 or depth == np.nan:
             return
-        x, y, z, r, _, _ = Detectron2node.get_pose_at_img_coordinate(
+        x, y, z, r, _, _ = self.get_pose_at_img_coordinate(
             depth, object_center, sa_points[6]
         )
         if not x or not y:
@@ -243,16 +248,17 @@ class Detectron2node(object):
 
         grasp_msg = PoseStamped()
         grasp_msg.header.stamp = rospy.Time.now()
-        grasp_msg.header.frame_id = "camera_color_frame"
+        grasp_msg.header.frame_id = "camera_color_optical_frame"
 
-        grasp_msg.pose.position.x = x
-        grasp_msg.pose.position.y = y
-        grasp_msg.pose.position.z = z - 0.17
+        grasp_msg.pose.position.x = x - 0.015
+        grasp_msg.pose.position.y = y + 0.012
+        grasp_msg.pose.position.z = z - 0.23
         ow, ox, oy, oz = quaternion_from_euler(r, 0, 0)
         grasp_msg.pose.orientation.w = ow
         grasp_msg.pose.orientation.x = ox
         grasp_msg.pose.orientation.y = oy
         grasp_msg.pose.orientation.z = oz
+
         self._grasp_pub.publish(grasp_msg)
 
     @staticmethod
@@ -267,13 +273,14 @@ class Detectron2node(object):
     def get_depth_at_point(depth_img, object_center) -> float:
         return depth_img[object_center[1]][object_center[0]]
 
-    @staticmethod
-    def get_pose_at_img_coordinate(depth, coord: Tuple[int, int], angle: float):
-        fx = fy = 419.0289001464844  # TODO get from camera info
-        cx, cy = 425.84820556640625 * 1.5, 235.1192169189453 * 1.5
+    def get_pose_at_img_coordinate(self, depth, coord: Tuple[int, int], angle: float):
+        fx = self.cam_K[0, 0]
+        fy = self.cam_K[1, 1]
+        cx, cy = self.cam_K[0, 2], self.cam_K[1, 2]
         X = (coord[0] - cx) / fx * depth
         Y = (coord[1] - cy) / fy * depth
-        return X / 2, Y / 2, depth, angle, 0, 0
+        # print(X, Y, depth)
+        return X, Y, depth, angle, 0, 0
 
     def convert_to_cv_image(self, image_msg):
         if image_msg is None:
