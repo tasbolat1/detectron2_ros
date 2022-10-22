@@ -114,8 +114,9 @@ class Detectron2node(object):
                     scale = 1
                     # img = Detectron2node.colormap_depth(depth_img) # TODO testing this
                     img = self.segmap_from_depthmap_2(depth_img_raw)
-                    img = np.moveaxis(img, 0, -1)
-                    img = img.astype(np.uint8)
+                    img = cv.applyColorMap(img, cv.COLORMAP_JET)
+                    #img = np.moveaxis(img, 0, -1)
+                    #img = img.astype(np.uint8)
                     # v = Visualizer(
                     #     img[:, :, ::-1].T,
                     #     MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]),
@@ -171,14 +172,15 @@ class Detectron2node(object):
 
     def segmap_from_depthmap_2(self, depth_img):
         blur = cv.GaussianBlur(depth_img, (5, 5), 0)
+        norm = np.zeros(blur.shape)
+        norm = cv.normalize(blur, norm, 0, 255, cv.NORM_MINMAX)
         ret, thres = cv.threshold(
-            blur, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU
-        )  # TODO test this in vis
-
+            norm, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU,
+        )
         # Marker labelling
-        ret, markers = cv.connectedComponents(thres)
-        # Add one to all labels so that sure background is not 0, but 1
-        return markers
+        ret, markers = cv.connectedComponents(np.uint8(thres))
+        markers *= 10
+        return np.uint8(markers)
 
     @staticmethod
     def draw_box_around_segmap(segmap):
@@ -282,7 +284,6 @@ class Detectron2node(object):
         grasp_msg.pose.position.x = x - 0.015
         grasp_msg.pose.position.y = y + 0.012
         grasp_msg.pose.position.z = z - 0.23
-        print("grasp depth", grasp_msg.pose.position.z)
         ow, ox, oy, oz = quaternion_from_euler(r, 0, 0)
         grasp_msg.pose.orientation.w = ow
         grasp_msg.pose.orientation.x = ox
@@ -363,7 +364,7 @@ class Detectron2node(object):
         rospy.logdebug("Get a depth raw image")
         if self._depth_raw_msg_lock.acquire(False):
             self._last_depth_raw_msg = msg
-            self._depth_msg_lock.release()
+            self._depth_raw_msg_lock.release()
 
     @staticmethod
     def load_param(param, default=None):
