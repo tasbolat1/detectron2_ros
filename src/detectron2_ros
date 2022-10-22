@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from os import spawnlp
 import sys
 import threading
 import time
@@ -12,6 +13,7 @@ from sklearn.decomposition import PCA
 import rospy
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import CameraInfo
+from std_msgs.msg import Float32MultiArray
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog
 from cv_bridge import CvBridge, CvBridgeError
@@ -49,7 +51,7 @@ class Detectron2node(object):
         self._visualization = self.load_param("~visualization", True)
         self._result_pub = rospy.Publisher("~result", Result, queue_size=1)
         self._vis_pub = rospy.Publisher("~visualization", Image, queue_size=1)
-        self._grasp_pub = rospy.Publisher("~grasp", PoseStamped, queue_size=1)
+        self._grasp_pub = rospy.Publisher("~grasp", Float32MultiArray, queue_size=1)
         # self._sub = rospy.Subscriber(
         #     self.load_param("~input"), Image, self.callback_image, queue_size=1
         # )
@@ -98,26 +100,21 @@ class Detectron2node(object):
                 depth_img_raw = self.convert_to_depth_img(depth_msg_raw, raw=True)
                 depth_img = np.nan_to_num(depth_img, nan=np.inf)
 
-                segmap = self.segmap_from_depthmap(depth_img)
-                sa_points = self.smallest_axis(segmap)
-                if not sa_points:
-                    continue
-                print("Angle:", sa_points[-1] * 180 / 3.14)
-                box = Detectron2node.draw_box_around_segmap(segmap)
-                result_msg = self.get_result_msg([box], [segmap])
+                num_components, segmap = self.segmap_from_depthmap_2(depth_img_raw)
+                sa_points_array = []
+                for class_id in range(1, num_components):
+                    sa_points = self.smallest_axis(segmap, class_id=class_id)
+                    if sa_points:
+                        sa_points_array.append(sa_points)
 
-                self.publish_grasp(sa_points, depth_img)
-                self._result_pub.publish(result_msg)
+                self.publish_grasp(sa_points_array, depth_img)
 
                 # Visualize results
                 if self._visualization:
                     scale = 1
-                    # img = Detectron2node.colormap_depth(depth_img) # TODO testing this
-                    img = self.segmap_from_depthmap_2(depth_img_raw)
-                    img *= 40
-                    img = cv.applyColorMap(img, cv.COLORMAP_JET)
-                    #img = np.moveaxis(img, 0, -1)
-                    
+                    img = Detectron2node.colormap_segmap(segmap)
+                    # img = np.moveaxis(img, 0, -1)
+
                     # v = Visualizer(
                     #     img[:, :, ::-1].T,
                     #     MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]),
@@ -143,7 +140,7 @@ class Detectron2node(object):
                     # ]
                     img_contiguous = np.ascontiguousarray(img)
                     # add grasp
-                    if sa_points:
+                    for sa_points in sa_points_array:
                         cv.line(
                             img_contiguous,
                             (int(sa_points[1] * scale), int(sa_points[0] * scale)),
@@ -175,16 +172,19 @@ class Detectron2node(object):
         blur = cv.GaussianBlur(depth_img, (7, 7), 0)
         blur = cv.blur(blur, (17, 17))
         # cut out top right corner which is noisy
-        blur[:100, 750:] = 1000 
+        blur[:100, 680:] = 1000
 
         TABLE_DEPTH = 563
         ret, thres = cv.threshold(
-            blur, TABLE_DEPTH, 255, cv.THRESH_BINARY_INV,
+            blur,
+            TABLE_DEPTH,
+            255,
+            cv.THRESH_BINARY_INV,
         )
         # Marker labelling
         ret, markers = cv.connectedComponents(np.uint8(thres))
         print("num components", ret)
-        return np.uint8(markers)
+        return ret, np.uint8(markers)
 
     @staticmethod
     def draw_box_around_segmap(segmap):
@@ -195,10 +195,10 @@ class Detectron2node(object):
         return (min_x, min_y, max_x, max_y)
 
     @staticmethod
-    def colormap_depth(depth_img):
-        # map 0-1.5m to rgb
-        single_channel = np.interp(depth_img, [0.1, 1.5], [255, 0])
-        return np.array([single_channel, single_channel, single_channel])
+    def colormap_segmap(segmap):
+        # map 0-numclasses to rgb
+        segmap *= 25
+        return cv.applyColorMap(segmap, cv.COLORMAP_JET)
 
     def smallest_axis(self, mask, class_id=1):
         mask_xy = np.argwhere(mask == class_id)
@@ -236,64 +236,32 @@ class Detectron2node(object):
             angle,
         )  # center[0] = y, center[1] = x
 
-    def get_result_msg(self, boxes, masks):
-        result_msg = Result()
-        result_msg.header = self._header
-
-        # # replace toilet to tofu
-        # _temp = np.array(self._class_names)[result_msg.class_ids.numpy()]
-        # for i, nnn in enumerate(result_msg.class_names):
-        #     if nnn == 'toilet':
-        #         result_msg.class_names[i] = 'tofu'
-        #     elif nnn == 'person':
-        #         result_msg.class_names[i] = 'tofu'
-
-        for i, (x1, y1, x2, y2) in enumerate(boxes):
-            mask = np.zeros(masks[i].shape, dtype="uint8")
-            mask[masks[i][:, :]] = 255
-            mask = self._bridge.cv2_to_imgmsg(mask)
-            result_msg.masks.append(mask)
-
-            box = RegionOfInterest()
-            box.x_offset = np.uint32(x1)
-            box.y_offset = np.uint32(y1)
-            box.height = np.uint32(y2 - y1)
-            box.width = np.uint32(x2 - x1)
-            result_msg.boxes.append(box)
-
-        return result_msg
-
-    def publish_grasp(self, sa_points, depth_img) -> None:
-        if not sa_points:
-            return
-        object_center = (int(sa_points[5]), int(sa_points[4]))  # x, y
-        depth = Detectron2node.get_depth_at_point(depth_img, object_center)
-        if depth == 0 or depth == np.nan:
-            return
-        x, y, z, r, _, _ = self.get_pose_at_img_coordinate(
-            depth, object_center, sa_points[6]
-        )
-        if not x or not y:
-            return
-        if r > pi / 2:  # make angle acute
-            r = -(pi - r)
-        elif r < -pi / 4:
-            r = pi + r
-        r += pi / 2
-
-        grasp_msg = PoseStamped()
-        grasp_msg.header.stamp = rospy.Time.now()
-        grasp_msg.header.frame_id = "camera_color_optical_frame"
-
-        grasp_msg.pose.position.x = x - 0.015
-        grasp_msg.pose.position.y = y + 0.012
-        grasp_msg.pose.position.z = z - 0.23
-        ow, ox, oy, oz = quaternion_from_euler(r, 0, 0)
-        grasp_msg.pose.orientation.w = ow
-        grasp_msg.pose.orientation.x = ox
-        grasp_msg.pose.orientation.y = oy
-        grasp_msg.pose.orientation.z = oz
-
+    def publish_grasp(self, sa_points_array, depth_img) -> None:
+        grasp_msg = Float32MultiArray()
+        data = []
+        for sa_points in sa_points_array:
+            object_center = (int(sa_points[5]), int(sa_points[4]))  # x, y
+            depth = Detectron2node.get_depth_at_point(depth_img, object_center)
+            if depth == 0 or depth == np.nan:
+                continue
+            x, y, z, r, _, _ = self.get_pose_at_img_coordinate(
+                depth, object_center, sa_points[6]
+            )
+            if not x or not y:
+                continue
+            
+            # make some corrections
+            x -= 0.015
+            y += 0.012
+            z -= 0.23
+            
+            if r > pi / 2:  # make angle acute
+                r = -(pi - r)
+            elif r < -pi / 4:
+                r = pi + r
+            r += pi / 2
+            data.extend([x, y, z, r])
+        grasp_msg.data = data
         self._grasp_pub.publish(grasp_msg)
 
     def convert_to_depth_img(self, depth_msg, raw=False):
@@ -301,8 +269,8 @@ class Detectron2node(object):
             shape=(depth_msg.height, depth_msg.width),
             dtype=np.uint16 if raw else np.float32,
             buffer=depth_msg.data,
-        )[:, : int(23 / 32 * depth_msg.width)]
-        # self.normalise_angle(depth_img, depth_msg.height, depth_msg.width)
+        )[70:, : int(23 / 32 * depth_msg.width)]
+        # cropping here to remove irrelevant sections
         return depth_img
 
     # def normalise_angle(self, depth_img, h, w):
