@@ -26,6 +26,7 @@ from detectron2.utils.visualizer import Visualizer
 from detectron2_ros.msg import Result
 from sensor_msgs.msg import Image, RegionOfInterest
 
+LEFT_X_OFFSET = 70
 
 class Detectron2node(object):
     def __init__(self):
@@ -98,8 +99,8 @@ class Detectron2node(object):
                     )
 
                 depth_img = self.convert_to_depth_img(depth_msg)
-                depth_img_raw = self.convert_to_depth_img(depth_msg_raw, raw=True)
                 depth_img = np.nan_to_num(depth_img, nan=np.inf)
+                depth_img_raw = self.convert_to_depth_img(depth_msg_raw, raw=True)
 
                 num_components, segmap = self.segmap_from_depthmap_2(depth_img_raw)
                 sa_points_array = []
@@ -214,7 +215,7 @@ class Detectron2node(object):
         except ValueError as e:
             print(e)
             return None
-            
+
         # choose smallest component
         comp = pca.components_[1]
         var = pca.explained_variance_[1]
@@ -275,7 +276,7 @@ class Detectron2node(object):
             shape=(depth_msg.height, depth_msg.width),
             dtype=np.uint16 if raw else np.float32,
             buffer=depth_msg.data,
-        )[:, 70: int(23 / 32 * depth_msg.width)]
+        )[:, LEFT_X_OFFSET: int(23 / 32 * depth_msg.width)]
         # cropping here to remove irrelevant sections
         return depth_img
 
@@ -291,7 +292,7 @@ class Detectron2node(object):
         fx = self.cam_K[0, 0]
         fy = self.cam_K[1, 1]
         cx, cy = self.cam_K[0, 2], self.cam_K[1, 2]
-        X = (coord[0] - cx) / fx * depth
+        X = (LEFT_X_OFFSET + coord[0] - cx) / fx * depth
         Y = (coord[1] - cy) / fy * depth
         # print(X, Y, depth)
         return X, Y, depth, angle, 0, 0
