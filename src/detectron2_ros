@@ -114,9 +114,10 @@ class Detectron2node(object):
                     scale = 1
                     # img = Detectron2node.colormap_depth(depth_img) # TODO testing this
                     img = self.segmap_from_depthmap_2(depth_img_raw)
+                    img *= 50
                     img = cv.applyColorMap(img, cv.COLORMAP_JET)
                     #img = np.moveaxis(img, 0, -1)
-                    #img = img.astype(np.uint8)
+                    
                     # v = Visualizer(
                     #     img[:, :, ::-1].T,
                     #     MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]),
@@ -172,14 +173,14 @@ class Detectron2node(object):
 
     def segmap_from_depthmap_2(self, depth_img):
         blur = cv.GaussianBlur(depth_img, (5, 5), 0)
-        norm = np.zeros(blur.shape)
-        norm = cv.normalize(blur, norm, 0, 255, cv.NORM_MINMAX)
         ret, thres = cv.threshold(
-            norm, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU,
+            blur, 0, np.max(blur), cv.THRESH_BINARY + cv.THRESH_OTSU,
         )
+        norm = np.zeros(blur.shape)
+        norm = cv.normalize(thres, norm, 0, 255, cv.NORM_MINMAX) #connected components only work on uint8
         # Marker labelling
-        ret, markers = cv.connectedComponents(np.uint8(thres))
-        markers *= 10
+        ret, markers = cv.connectedComponents(np.uint8(norm))
+        print("num components", np.max(markers))
         return np.uint8(markers)
 
     @staticmethod
