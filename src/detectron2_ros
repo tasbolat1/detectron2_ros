@@ -114,7 +114,7 @@ class Detectron2node(object):
                     scale = 1
                     # img = Detectron2node.colormap_depth(depth_img) # TODO testing this
                     img = self.segmap_from_depthmap_2(depth_img_raw)
-                    img *= 50
+                    img *= 40
                     img = cv.applyColorMap(img, cv.COLORMAP_JET)
                     #img = np.moveaxis(img, 0, -1)
                     
@@ -172,15 +172,15 @@ class Detectron2node(object):
         return mask.astype(int)  # convert bool to 0 and 1
 
     def segmap_from_depthmap_2(self, depth_img):
-        blur = cv.GaussianBlur(depth_img, (5, 5), 0)
+        blur = cv.GaussianBlur(depth_img, (7, 7), 0)
+        blur = cv.blur(blur, (17, 17))
+        TABLE_DEPTH = 563
         ret, thres = cv.threshold(
-            blur, 0, np.max(blur), cv.THRESH_BINARY + cv.THRESH_OTSU,
+            blur, TABLE_DEPTH, 255, cv.THRESH_BINARY_INV,
         )
-        norm = np.zeros(blur.shape)
-        norm = cv.normalize(thres, norm, 0, 255, cv.NORM_MINMAX) #connected components only work on uint8
         # Marker labelling
-        ret, markers = cv.connectedComponents(np.uint8(norm))
-        print("num components", np.max(markers))
+        ret, markers = cv.connectedComponents(np.uint8(thres))
+        print("num components", ret)
         return np.uint8(markers)
 
     @staticmethod
@@ -298,7 +298,7 @@ class Detectron2node(object):
             shape=(depth_msg.height, depth_msg.width),
             dtype=np.uint16 if raw else np.float32,
             buffer=depth_msg.data,
-        )[:, : int(11 / 16 * depth_msg.width)]
+        )[:, : int(23 / 32 * depth_msg.width)]
         # self.normalise_angle(depth_img, depth_msg.height, depth_msg.width)
         return depth_img
 
