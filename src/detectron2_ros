@@ -214,6 +214,7 @@ class Detectron2node(object):
         except ValueError as e:
             print(e)
             return None
+            
         # choose smallest component
         comp = pca.components_[1]
         var = pca.explained_variance_[1]
