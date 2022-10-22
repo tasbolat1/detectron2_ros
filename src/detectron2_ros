@@ -98,7 +98,8 @@ class Detectron2node(object):
                 # Visualize results
                 if self._visualization:
                     scale = 1
-                    img = Detectron2node.colormap_depth(depth_img)
+                    # img = Detectron2node.colormap_depth(depth_img) # TODO testing this
+                    img = self.segmap_from_depthmap_2(depth_img)
                     img = np.moveaxis(img, 0, -1)
                     img = img.astype(np.uint8)
                     # v = Visualizer(
@@ -154,6 +155,17 @@ class Detectron2node(object):
         print("frac ", np.argwhere(mask).shape[0] / (mask.shape[0] * mask.shape[1]))
         return mask.astype(int)  # convert bool to 0 and 1
 
+    def segmap_from_depthmap_2(self, depth_img):
+        blur = cv.GaussianBlur(depth_img, (5, 5), 0)
+        ret, thres = cv.threshold(
+            blur, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU
+        )  # TODO test this in vis
+
+        # Marker labelling
+        ret, markers = cv.connectedComponents(thres)
+        # Add one to all labels so that sure background is not 0, but 1
+        return markers
+
     @staticmethod
     def draw_box_around_segmap(segmap):
         # it seems like the box is only for visualisation, so there is no need to find the tightest bounding box here
@@ -168,8 +180,8 @@ class Detectron2node(object):
         single_channel = np.interp(depth_img, [0.1, 1.5], [255, 0])
         return np.array([single_channel, single_channel, single_channel])
 
-    def smallest_axis(self, mask):
-        mask_xy = np.argwhere(mask != 0)
+    def smallest_axis(self, mask, class_id=1):
+        mask_xy = np.argwhere(mask == class_id)
         if len(mask_xy) == 0:
             return
         center = mask_xy.mean(axis=0)
@@ -270,15 +282,13 @@ class Detectron2node(object):
             shape=(depth_msg.height, depth_msg.width),
             dtype=np.float32,
             buffer=depth_msg.data,
-        )[:, :int(11/16 * depth_msg.width)]
-       # self.normalise_angle(depth_img, depth_msg.height, depth_msg.width)
+        )[:, : int(11 / 16 * depth_msg.width)]
+        # self.normalise_angle(depth_img, depth_msg.height, depth_msg.width)
         return depth_img
 
     # def normalise_angle(self, depth_img, h, w):
     #     if not pre
     #     center = (h / 2, w / 2)
-        
-
 
     @staticmethod
     def get_depth_at_point(depth_img, object_center) -> float:
