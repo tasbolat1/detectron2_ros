@@ -174,7 +174,7 @@ class Detectron2node(object):
         blur = cv.GaussianBlur(depth_img, (7, 7), 0)
         blur = cv.blur(blur, (17, 17))
         # cut out top right corner which is noisy
-        blur[:100, 680:] = 1000
+        blur[:110, 675:] = 1000
 
         TABLE_DEPTH = 563
         ret, thres = cv.threshold(
@@ -246,7 +246,7 @@ class Detectron2node(object):
     def publish_grasp(self, sa_points_array, depth_img) -> None:
         grasp_msg = Float32MultiArray()
         data = []
-        for sa_points in sa_points_array:
+        for i, sa_points in enumerate(sa_points_array):
             object_center = (int(sa_points[5]), int(sa_points[4]))  # x, y
             depth = Detectron2node.get_depth_at_point(depth_img, object_center)
             if depth == 0 or depth == np.nan:
@@ -260,13 +260,14 @@ class Detectron2node(object):
             # make some corrections
             x -= 0.015
             y += 0.012
-            z -= 0.23
+            z -= 0.24
             
+            r = pi / 2 - r
             if r > pi / 2:  # make angle acute
                 r = -(pi - r)
-            elif r < -pi / 4:
+            elif r < -pi / 2:
                 r = pi + r
-            r += pi / 2
+            
             data.extend([x, y, z, r])
         grasp_msg.data = data
         self._grasp_pub.publish(grasp_msg)
