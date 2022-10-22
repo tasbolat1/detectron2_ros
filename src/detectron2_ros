@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from multiprocessing.sharedctypes import Value
 from os import spawnlp
 import sys
 import threading
@@ -207,8 +208,12 @@ class Detectron2node(object):
         center = mask_xy.mean(axis=0)
 
         # run pca
-        pca = PCA(n_components=2)
-        pca.fit(mask_xy)
+        try:
+            pca = PCA(n_components=2)
+            pca.fit(mask_xy)
+        except ValueError as e:
+            print(e)
+            return None
         # choose smallest component
         comp = pca.components_[1]
         var = pca.explained_variance_[1]
@@ -269,7 +274,7 @@ class Detectron2node(object):
             shape=(depth_msg.height, depth_msg.width),
             dtype=np.uint16 if raw else np.float32,
             buffer=depth_msg.data,
-        )[70:, : int(23 / 32 * depth_msg.width)]
+        )[:, 70: int(23 / 32 * depth_msg.width)]
         # cropping here to remove irrelevant sections
         return depth_img
 
