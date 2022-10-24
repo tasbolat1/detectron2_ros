@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from typing import Tuple
+from collections import deque
 from math import pi
 
 import cv2 as cv
@@ -27,6 +28,7 @@ from detectron2_ros.msg import Result
 from sensor_msgs.msg import Image, RegionOfInterest
 
 LEFT_X_OFFSET = 70
+
 
 class Detectron2node(object):
     def __init__(self):
@@ -105,7 +107,7 @@ class Detectron2node(object):
                 num_components, segmap = self.segmap_from_depthmap_2(depth_img_raw)
                 sa_points_array = []
                 for class_id in range(1, num_components):
-                    sa_points = self.smallest_axis(segmap, class_id=class_id)
+                    sa_points = self.smallest_axis(segmap, depth_img, class_id=class_id)
                     if sa_points:
                         sa_points_array.append(sa_points)
 
@@ -202,16 +204,42 @@ class Detectron2node(object):
         segmap *= 25
         return cv.applyColorMap(segmap, cv.COLORMAP_JET)
 
-    def smallest_axis(self, mask, class_id=1):
-        mask_xy = np.argwhere(mask == class_id)
-        if len(mask_xy) == 0:
-            return
-        center = mask_xy.mean(axis=0)
+    def smallest_axis(self, segmap, depth_img, class_id=1):
+        mask = np.ma.masked_where(segmap != class_id, segmap)  # filter out != class_id
+        masked_depth_img = np.ma.masked_where(np.ma.getmask(mask), depth_img)
+        top_coord = np.unravel_index(
+            np.argmax(masked_depth_img), masked_depth_img.shape
+        )
 
+        top_surface_coords = set()
+        queue = deque([top_coord])
+        while queue:
+            coord = queue.popleft()
+            if coord in top_surface_coords:
+                continue
+            top_surface_coords.add(coord)
+            for neighbor_d in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                neighbor_coord = (coord[0] + neighbor_d[0], coord[1] + neighbor_d[1])
+                if (
+                    neighbor_coord[0] < 0  # out of bounds check
+                    or neighbor_coord[0] >= masked_depth_img.shape[0]
+                    or neighbor_coord[1] < 0
+                    or neighbor_coord[1] >= masked_depth_img.shape[1]
+                    or not bool(masked_depth_img[neighbor_coord])  # outside of mask
+                    or abs(masked_depth_img[coord] - masked_depth_img[neighbor_coord])
+                    > 0.01  # more than 1 cm gradient
+                ):
+                    continue
+                queue.append(neighbor_coord)
+
+        top_surface_coords = np.array(top_surface_coords)
+        if len(top_surface_coords) == 0:
+            return
+        center = top_surface_coords.mean(axis=0)
         # run pca
         try:
             pca = PCA(n_components=2)
-            pca.fit(mask_xy)
+            pca.fit(top_surface_coords)
         except ValueError as e:
             print(e)
             return None
@@ -256,18 +284,18 @@ class Detectron2node(object):
             )
             if not x or not y:
                 continue
-            
+
             # make some corrections
             x -= 0.015
             y += 0.012
             z -= 0.24
-            
+
             r = pi / 2 - r
             if r > pi / 2:  # make angle acute
                 r = -(pi - r)
             elif r < -pi / 2:
                 r = pi + r
-            
+
             data.extend([x, y, z, r])
         grasp_msg.data = data
         self._grasp_pub.publish(grasp_msg)
@@ -277,7 +305,7 @@ class Detectron2node(object):
             shape=(depth_msg.height, depth_msg.width),
             dtype=np.uint16 if raw else np.float32,
             buffer=depth_msg.data,
-        )[:, LEFT_X_OFFSET: int(23 / 32 * depth_msg.width)]
+        )[:, LEFT_X_OFFSET : int(23 / 32 * depth_msg.width)]
         # cropping here to remove irrelevant sections
         return depth_img
 
