@@ -208,7 +208,7 @@ class Detectron2node(object):
         mask = np.ma.masked_where(segmap != class_id, segmap)  # filter out != class_id
         masked_depth_img = np.ma.masked_where(np.ma.getmask(mask), depth_img)
         top_coord = np.unravel_index(
-            np.argmax(masked_depth_img), masked_depth_img.shape
+            np.argmin(masked_depth_img), masked_depth_img.shape
         )
 
         top_surface_coords = set()
@@ -231,8 +231,7 @@ class Detectron2node(object):
                 ):
                     continue
                 queue.append(neighbor_coord)
-
-        top_surface_coords = np.array(top_surface_coords)
+        top_surface_coords = np.array(list(top_surface_coords))
         if len(top_surface_coords) == 0:
             return
         center = top_surface_coords.mean(axis=0)
