@@ -6,11 +6,9 @@ import threading
 import time
 from typing import Tuple
 from collections import deque
-from math import pi
 
 import cv2 as cv
 import numpy as np
-from scipy.spatial.transform import Rotation
 from sklearn.decomposition import PCA
 import rospy
 from geometry_msgs.msg import PoseStamped
@@ -36,21 +34,21 @@ class Detectron2node(object):
         setup_logger()
 
         self._bridge = CvBridge()
-        self._last_depth_msg, self._last_depth_raw_msg = None, None
-        self._depth_msg_lock = threading.Lock()
-        self._depth_raw_msg_lock = threading.Lock()
+        self._last_depth_msg, self._last_depth_raw_msg, self._last_image_msg = (
+            None,
+            None,
+            None,
+        )
+        self._depth_msg_lock, self._depth_raw_msg_lock, self._image_msg_lock = (
+            threading.Lock(),
+            threading.Lock(),
+            threading.Lock(),
+        )
         self._image_counter = 0
         camera_info_msg = rospy.wait_for_message(
             "/camera/color/camera_info", CameraInfo
         )
         self.cam_K = np.array(camera_info_msg.K).reshape((3, 3))
-
-        self.cfg = get_cfg()  # TODO find a way to remove this
-        self.cfg.merge_from_file(self.load_param("~config"))
-        self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = self.load_param(
-            "~detection_threshold"
-        )  # set threshold for this model
-        self.cfg.MODEL.WEIGHTS = self.load_param("~model")
 
         self._visualization = self.load_param("~visualization", True)
         self._result_pub = rospy.Publisher("~result", Result, queue_size=1)
@@ -71,108 +69,122 @@ class Detectron2node(object):
             self.callback_depth_image_raw,
             queue_size=1,
         )
+        self._image_sub = rospy.Subscriber(
+            "/camera/color/image_raw", Image, self.callback_image, queue_size=1
+        )
         self.start_time = time.time()
         rospy.logwarn("Initialized")
 
     def run(self):
         rate = rospy.Rate(100)
         while not rospy.is_shutdown():
-            if self._depth_msg_lock.acquire(False) and self._depth_raw_msg_lock.acquire(
-                False
+            if (
+                self._depth_msg_lock.acquire(False)
+                and self._depth_raw_msg_lock.acquire(False)
+                and self._image_msg_lock.acquire(False)
             ):
-                depth_msg, depth_msg_raw = (
+                depth_msg, depth_msg_raw, image_msg = (
                     self._last_depth_msg,
                     self._last_depth_raw_msg,
+                    self._last_image_msg,
                 )
-                self._last_depth_msg, self._last_depth_raw_msg = None, None
+                self._last_depth_msg, self._last_depth_raw_msg, self._last_image_msg = (
+                    None,
+                    None,
+                    None,
+                )
                 self._depth_msg_lock.release()
                 self._depth_raw_msg_lock.release()
+                self._image_msg_lock.release()
 
             else:
                 rate.sleep()
                 continue
 
-            if depth_msg and depth_msg_raw:
-                self._image_counter = self._image_counter + 1
-                if (self._image_counter % 11) == 10:
-                    rospy.loginfo(
-                        "Images detected per second=%.2f",
-                        float(self._image_counter) / (time.time() - self.start_time),
+            if not depth_msg or not depth_msg_raw or not image_msg:
+                rate.sleep()
+                continue
+
+            self._image_counter = self._image_counter + 1
+            if (self._image_counter % 11) == 10:
+                rospy.loginfo(
+                    "Images detected per second=%.2f",
+                    float(self._image_counter) / (time.time() - self.start_time),
+                )
+            np_image = self.convert_to_cv_image(image_msg)  # TODO add object det
+            depth_img = self.convert_to_depth_img(depth_msg)
+            depth_img = np.nan_to_num(depth_img, nan=np.inf)
+            depth_img_raw = self.convert_to_depth_img(depth_msg_raw, raw=True)
+
+            num_components, segmap = self.segmap_from_depthmap(depth_img_raw)
+            sa_points_array = []
+            for class_id in range(1, num_components):
+                sa_points = self.smallest_axis(segmap, depth_img, class_id=class_id)
+                if sa_points:
+                    sa_points_array.append(sa_points)
+
+            self.publish_grasp(sa_points_array, depth_img)
+
+            # Visualize results
+            if self._visualization:
+                scale = 1
+                img = Detectron2node.colormap_segmap(segmap)
+                # img = np.moveaxis(img, 0, -1)
+
+                # v = Visualizer(
+                #     img[:, :, ::-1].T,
+                #     MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]),
+                #     scale=scale,
+                # )
+
+                # temp output
+                # _temp_output = outputs["instances"].to("cpu") # removed
+                # _class_ids = _temp_output.pred_classes if _temp_output.has("pred_classes") else None
+                # _names = np.array(self._class_names)[_class_ids.numpy()]
+
+                # for kkk, _name in enumerate(_names):
+                #     if _name == 'toilet':
+                #         print(_temp_output.pred_classes[_class_ids.numpy()[kkk]])
+                #         _temp_output.pred_classes[_class_ids.numpy()[kkk]] = 'tofu'
+                #     if _name == 'person':
+                #         print(_temp_output.pred_classes[_class_ids.numpy()[kkk]])
+                #         _temp_output.pred_classes[_class_ids.numpy()[kkk]] = 'tofu'
+
+                # v = v.draw_instance_predictions()
+                # img = v.get_image()[
+                #     :, :, ::-1
+                # ]
+                img_contiguous = np.ascontiguousarray(img)
+                # add grasp
+                for sa_points in sa_points_array:
+                    cv.line(
+                        img_contiguous,
+                        (int(sa_points[1] * scale), int(sa_points[0] * scale)),
+                        (int(sa_points[3] * scale), int(sa_points[2] * scale)),
+                        (0, 0, 255),
+                        5,
                     )
 
-                depth_img = self.convert_to_depth_img(depth_msg)
-                depth_img = np.nan_to_num(depth_img, nan=np.inf)
-                depth_img_raw = self.convert_to_depth_img(depth_msg_raw, raw=True)
+                    cv.circle(
+                        img_contiguous,
+                        (int(sa_points[5] * scale), int(sa_points[4] * scale)),
+                        10,
+                        (0, 255, 255),
+                        -1,
+                    )
 
-                num_components, segmap = self.segmap_from_depthmap_2(depth_img_raw)
-                sa_points_array = []
-                for class_id in range(1, num_components):
-                    sa_points = self.smallest_axis(segmap, depth_img, class_id=class_id)
-                    if sa_points:
-                        sa_points_array.append(sa_points)
-
-                self.publish_grasp(sa_points_array, depth_img)
-
-                # Visualize results
-                if self._visualization:
-                    scale = 1
-                    img = Detectron2node.colormap_segmap(segmap)
-                    # img = np.moveaxis(img, 0, -1)
-
-                    # v = Visualizer(
-                    #     img[:, :, ::-1].T,
-                    #     MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]),
-                    #     scale=scale,
-                    # )
-
-                    # temp output
-                    # _temp_output = outputs["instances"].to("cpu") # removed
-                    # _class_ids = _temp_output.pred_classes if _temp_output.has("pred_classes") else None
-                    # _names = np.array(self._class_names)[_class_ids.numpy()]
-
-                    # for kkk, _name in enumerate(_names):
-                    #     if _name == 'toilet':
-                    #         print(_temp_output.pred_classes[_class_ids.numpy()[kkk]])
-                    #         _temp_output.pred_classes[_class_ids.numpy()[kkk]] = 'tofu'
-                    #     if _name == 'person':
-                    #         print(_temp_output.pred_classes[_class_ids.numpy()[kkk]])
-                    #         _temp_output.pred_classes[_class_ids.numpy()[kkk]] = 'tofu'
-
-                    # v = v.draw_instance_predictions()
-                    # img = v.get_image()[
-                    #     :, :, ::-1
-                    # ]
-                    img_contiguous = np.ascontiguousarray(img)
-                    # add grasp
-                    for sa_points in sa_points_array:
-                        cv.line(
-                            img_contiguous,
-                            (int(sa_points[1] * scale), int(sa_points[0] * scale)),
-                            (int(sa_points[3] * scale), int(sa_points[2] * scale)),
-                            (0, 0, 255),
-                            5,
-                        )
-
-                        cv.circle(
-                            img_contiguous,
-                            (int(sa_points[5] * scale), int(sa_points[4] * scale)),
-                            10,
-                            (0, 255, 255),
-                            -1,
-                        )
-
-                    image_msg = self._bridge.cv2_to_imgmsg(img_contiguous)
-                    self._vis_pub.publish(image_msg)
+                image_msg = self._bridge.cv2_to_imgmsg(img_contiguous)
+                self._vis_pub.publish(image_msg)
 
             rate.sleep()
 
-    def segmap_from_depthmap(self, depth_img):
+    def segmap_from_depthmap_v1(self, depth_img):
         min_depth = np.min(depth_img)
         mask = depth_img < (min_depth + 0.02)  # +2cm
         print("frac ", np.argwhere(mask).shape[0] / (mask.shape[0] * mask.shape[1]))
         return mask.astype(int)  # convert bool to 0 and 1
 
-    def segmap_from_depthmap_2(self, depth_img):
+    def segmap_from_depthmap(self, depth_img):
         blur = cv.GaussianBlur(depth_img, (7, 7), 0)
         blur = cv.blur(blur, (17, 17))
         # cut out top right corner which is noisy
@@ -201,7 +213,7 @@ class Detectron2node(object):
     @staticmethod
     def colormap_segmap(segmap):
         # map 0-numclasses to rgb
-        segmap *= 25
+        segmap *= 25  # stretch values to make distinguishable
         return cv.applyColorMap(segmap, cv.COLORMAP_JET)
 
     def smallest_axis(self, segmap, depth_img, class_id=1):
@@ -254,10 +266,10 @@ class Detectron2node(object):
         y2 = comp[1] + center[1]
 
         # calculate angle
-        angle = np.arctan2(comp[1], comp[0]) + np.pi / 2
+        angle = np.pi / 2 - np.arctan2(comp[1], comp[0])
         if angle >= np.pi:
             angle = angle - np.pi
-        elif angle <= -np.pi:
+        elif angle < -np.pi:
             angle = angle + np.pi
 
         return (
@@ -273,7 +285,7 @@ class Detectron2node(object):
     def publish_grasp(self, sa_points_array, depth_img) -> None:
         grasp_msg = Float32MultiArray()
         data = []
-        for i, sa_points in enumerate(sa_points_array):
+        for sa_points in sa_points_array:
             object_center = (int(sa_points[5]), int(sa_points[4]))  # x, y
             depth = Detectron2node.get_depth_at_point(depth_img, object_center)
             if depth == 0 or depth == np.nan:
@@ -288,13 +300,6 @@ class Detectron2node(object):
             x -= 0.015
             y += 0.012
             z -= 0.24
-
-            r = pi / 2 - r
-            if r > pi / 2:  # make angle acute
-                r = -(pi - r)
-            elif r < -pi / 2:
-                r = pi + r
-
             data.extend([x, y, z, r])
         grasp_msg.data = data
         self._grasp_pub.publish(grasp_msg)
@@ -307,10 +312,6 @@ class Detectron2node(object):
         )[:, LEFT_X_OFFSET : int(23 / 32 * depth_msg.width)]
         # cropping here to remove irrelevant sections
         return depth_img
-
-    # def normalise_angle(self, depth_img, h, w):
-    #     if not pre
-    #     center = (h / 2, w / 2)
 
     @staticmethod
     def get_depth_at_point(depth_img, object_center) -> float:
@@ -361,28 +362,26 @@ class Detectron2node(object):
         return cv_img
 
     def callback_depth_image(self, msg):
-        rospy.logdebug("Get a depth image")
         if self._depth_msg_lock.acquire(False):
             self._last_depth_msg = msg
             self._header = msg.header
             self._depth_msg_lock.release()
 
     def callback_depth_image_raw(self, msg):
-        rospy.logdebug("Get a depth raw image")
         if self._depth_raw_msg_lock.acquire(False):
             self._last_depth_raw_msg = msg
             self._depth_raw_msg_lock.release()
+
+    def callback_image_raw(self, msg):
+        if self._image_msg_lock.acquire(False):
+            self._last_image_msg = msg
+            self._image_msg_lock.release()
 
     @staticmethod
     def load_param(param, default=None):
         new_param = rospy.get_param(param, default)
         rospy.loginfo("[Detectron2] %s: %s", param, new_param)
         return new_param
-
-
-def quaternion_from_euler(r, p, y):
-    rot = Rotation.from_euler("xyz", [r, p, y])
-    return rot.as_quat()
 
 
 def main(argv):
