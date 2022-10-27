@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 from typing import Tuple
-from collections import deque
+from collections import deque, defaultdict
 
 import torch
 import cv2 as cv
@@ -14,7 +14,7 @@ from sklearn.decomposition import PCA
 import rospy
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import CameraInfo
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, String
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog
 from cv_bridge import CvBridge, CvBridgeError
@@ -57,6 +57,7 @@ class Detectron2node(object):
         self._result_pub = rospy.Publisher("~result", Result, queue_size=1)
         self._vis_pub = rospy.Publisher("~visualization", Image, queue_size=1)
         self._grasp_pub = rospy.Publisher("~grasp", Float32MultiArray, queue_size=1)
+        self._object_names_pub = rospy.Publisher("~object_names", String, queue_size=1)
         self._depth_sub = rospy.Subscriber(
             "/camera/aligned_depth_to_color/image_meters",
             Image,
@@ -301,12 +302,18 @@ class Detectron2node(object):
         grasp_msg = Float32MultiArray()
         data = []
         class_names = []
+        class_names_counter = defaultdict(int)
         for sa_points in sa_points_array:
             object_center = (int(sa_points[5]), int(sa_points[4]))  # x, y
             class_name = Detectron2node.get_class_name_at_center(
                 object_center, bounding_boxes, class_dict
             )
-            class_names.append(class_name)
+            if class_name:
+                class_names.append(class_name + str(class_names_counter[class_name]) if class_name in class_names_counter else class_name)
+                class_names_counter[class_name] += 1
+            else:
+                class_names.append('')
+
             depth = Detectron2node.get_depth_at_point(depth_img, object_center)
             if depth == 0 or depth == np.nan:
                 continue
@@ -323,6 +330,9 @@ class Detectron2node(object):
             data.extend([x, y, z, r])  # TODO change message format
         grasp_msg.data = data
         self._grasp_pub.publish(grasp_msg)
+        object_names_msg = String()
+        object_names_msg.data = ','.join(class_names)
+        self._object_names_pub.publish(object_names_msg)
         return class_names
 
     @staticmethod
