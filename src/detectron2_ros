@@ -130,7 +130,7 @@ class Detectron2node(object):
                 if sa_points:
                     sa_points_array.append(sa_points)
 
-            self.publish_grasp(
+            class_names = self.publish_grasp(
                 sa_points_array,
                 depth_img,
                 bounding_boxes,
@@ -168,7 +168,7 @@ class Detectron2node(object):
                 # ]
                 img_contiguous = np.ascontiguousarray(img)
                 # add grasp
-                for sa_points in sa_points_array:
+                for class_name, sa_points in zip(class_names, sa_points_array):
                     cv.line(
                         img_contiguous,
                         (int(sa_points[1] * scale), int(sa_points[0] * scale)),
@@ -184,6 +184,7 @@ class Detectron2node(object):
                         (0, 255, 255),
                         -1,
                     )
+                    cv.putText(img_contiguous, class_name, (int(sa_points[5]) + 30, int(sa_points[4])), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv.LINE_AA)
 
                 image_msg = self._bridge.cv2_to_imgmsg(img_contiguous)
                 self._vis_pub.publish(image_msg)
@@ -295,15 +296,17 @@ class Detectron2node(object):
         )  # center[0] = y, center[1] = x
 
     def publish_grasp(
-        self, sa_points_array, depth_img, bounding_boxes, class_names
+        self, sa_points_array, depth_img, bounding_boxes, class_dict
     ) -> None:
         grasp_msg = Float32MultiArray()
         data = []
+        class_names = []
         for sa_points in sa_points_array:
             object_center = (int(sa_points[5]), int(sa_points[4]))  # x, y
             class_name = Detectron2node.get_class_name_at_center(
-                object_center, bounding_boxes, class_names
+                object_center, bounding_boxes, class_dict
             )
+            class_names.append(class_name)
             depth = Detectron2node.get_depth_at_point(depth_img, object_center)
             if depth == 0 or depth == np.nan:
                 continue
@@ -320,6 +323,7 @@ class Detectron2node(object):
             data.extend([x, y, z, r])  # TODO change message format
         grasp_msg.data = data
         self._grasp_pub.publish(grasp_msg)
+        return class_names
 
     @staticmethod
     def get_class_name_at_center(object_center, bounding_boxes, class_ids):
