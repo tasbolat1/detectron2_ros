@@ -7,6 +7,7 @@ import time
 from typing import Tuple
 from collections import deque
 
+import torch
 import cv2 as cv
 import numpy as np
 from sklearn.decomposition import PCA
@@ -34,6 +35,7 @@ class Detectron2node(object):
         setup_logger()
 
         self._bridge = CvBridge()
+        self.object_detector = torch.hub.load("ultralytics/yolov5", "yolov5s")
         self._last_depth_msg, self._last_depth_raw_msg, self._last_image_msg = (
             None,
             None,
@@ -54,9 +56,6 @@ class Detectron2node(object):
         self._result_pub = rospy.Publisher("~result", Result, queue_size=1)
         self._vis_pub = rospy.Publisher("~visualization", Image, queue_size=1)
         self._grasp_pub = rospy.Publisher("~grasp", Float32MultiArray, queue_size=1)
-        # self._sub = rospy.Subscriber(
-        #     self.load_param("~input"), Image, self.callback_image, queue_size=1
-        # )
         self._depth_sub = rospy.Subscriber(
             "/camera/aligned_depth_to_color/image_meters",
             Image,
@@ -112,8 +111,12 @@ class Detectron2node(object):
                     float(self._image_counter) / (time.time() - self.start_time),
                 )
             np_image = self.convert_to_cv_image(image_msg)
-            bounding_boxes, class_ids = self.object_detector(np_image)  # TODO
-            # TODO Sort bounding boxes by size ascending
+            object_detection_results = self.object_detector(np_image)
+            bounding_boxes = object_detection_results.xywh[0]
+            bounding_boxes = [
+                (t[2].item() * t[3].item(), t) for t in bounding_boxes
+            ]  # sort by smallest area
+            bounding_boxes.sort(key=lambda tup: tup[0])
 
             depth_img = self.convert_to_depth_img(depth_msg)
             depth_img = np.nan_to_num(depth_img, nan=np.inf)
@@ -126,7 +129,12 @@ class Detectron2node(object):
                 if sa_points:
                     sa_points_array.append(sa_points)
 
-            self.publish_grasp(sa_points_array, depth_img, bounding_boxes, class_ids)
+            self.publish_grasp(
+                sa_points_array,
+                depth_img,
+                bounding_boxes,
+                object_detection_results.names,
+            )
 
             # Visualize results
             if self._visualization:
@@ -265,8 +273,8 @@ class Detectron2node(object):
         x1 = center[0] - comp[0]
         y1 = center[1] - comp[1]
 
-        x2 = comp[0] + center[0]
-        y2 = comp[1] + center[1]
+        x2 = center[0] + comp[0]
+        y2 = center[1] + comp[1]
 
         # calculate angle
         angle = np.pi / 2 - np.arctan2(comp[1], comp[0])
@@ -286,15 +294,15 @@ class Detectron2node(object):
         )  # center[0] = y, center[1] = x
 
     def publish_grasp(
-        self, sa_points_array, depth_img, bounding_boxes, class_ids
+        self, sa_points_array, depth_img, bounding_boxes, class_names
     ) -> None:
         grasp_msg = Float32MultiArray()
         data = []
         for sa_points in sa_points_array:
             object_center = (int(sa_points[5]), int(sa_points[4]))  # x, y
-            class_id = Detectron2node.get_class_id_at_center(
-                object_center, bounding_boxes, class_ids
-            )  # TODO
+            class_name = Detectron2node.get_class_name_at_center(
+                object_center, bounding_boxes, class_names
+            )
             depth = Detectron2node.get_depth_at_point(depth_img, object_center)
             if depth == 0 or depth == np.nan:
                 continue
@@ -308,15 +316,28 @@ class Detectron2node(object):
             x -= 0.015
             y += 0.012
             z -= 0.24
+            print(x, y, class_name)
             data.extend([x, y, z, r])  # TODO change message format
         grasp_msg.data = data
         self._grasp_pub.publish(grasp_msg)
 
     @staticmethod
-    def get_class_id_at_center(object_center, bounding_boxes, class_ids):
-        for bb in bounding_boxes:
-            # TODO check if obj center within bounds
-            pass
+    def get_class_name_at_center(object_center, bounding_boxes, class_ids):
+        for _box_area, bb in bounding_boxes:
+            x, y, w, h, class_id = (
+                bb[0].item(),
+                bb[1].item(),
+                bb[2].item(),
+                bb[3].item(),
+                bb[5].item(),
+            )
+            if (
+                object_center[0] > x
+                and object_center[0] < x + w
+                and object_center[1] > y
+                and object_center[1] < y + h
+            ):
+                return class_ids[class_id]
 
     def convert_to_depth_img(self, depth_msg, raw=False):
         depth_img = np.ndarray(
