@@ -280,11 +280,14 @@ class Detectron2node(object):
         y2 = center[1] + comp[1]
 
         # calculate angle
-        angle = np.pi / 2 - np.arctan2(comp[1], comp[0])
-        if angle >= np.pi / 2:
-            angle = angle - np.pi
-        elif angle < -np.pi / 2:
-            angle = angle + np.pi
+        angle = np.arctan2(comp[1], comp[0])
+        if angle < 0:
+            angle = np.pi + angle
+        angle = np.pi / 2 - angle
+        if angle < 0:
+            angle += np.pi / 2
+        else:
+            angle -= np.pi / 2
 
         return (
             x1,
