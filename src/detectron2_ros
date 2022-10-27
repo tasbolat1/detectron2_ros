@@ -35,7 +35,8 @@ class Detectron2node(object):
         setup_logger()
 
         self._bridge = CvBridge()
-        self.object_detector = torch.hub.load("ultralytics/yolov5", "yolov5s")
+        self.object_detector = torch.hub.load("ultralytics/yolov5", "yolov5l")
+        self.object_detector.conf = 0.01
         self._last_depth_msg, self._last_depth_raw_msg, self._last_image_msg = (
             None,
             None,
@@ -316,7 +317,6 @@ class Detectron2node(object):
             x -= 0.015
             y += 0.012
             z -= 0.24
-            print(x, y, class_name)
             data.extend([x, y, z, r])  # TODO change message format
         grasp_msg.data = data
         self._grasp_pub.publish(grasp_msg)
@@ -324,19 +324,19 @@ class Detectron2node(object):
     @staticmethod
     def get_class_name_at_center(object_center, bounding_boxes, class_ids):
         for _box_area, bb in bounding_boxes:
-            x, y, w, h, class_id = (
-                bb[0].item(),
+            x, y, dx, dy, class_id = (
+                bb[0].item() - LEFT_X_OFFSET,
                 bb[1].item(),
-                bb[2].item(),
-                bb[3].item(),
+                bb[2].item() / 2,
+                bb[3].item() / 2,
                 bb[5].item(),
             )
             if (
-                object_center[0] > x
-                and object_center[0] < x + w
-                and object_center[1] > y
-                and object_center[1] < y + h
-            ):
+                object_center[0] > x - dx
+                and object_center[0] < x + dx
+                and object_center[1] > y - dy
+                and object_center[1] < y + dy
+            ):  
                 return class_ids[class_id]
 
     def convert_to_depth_img(self, depth_msg, raw=False):
@@ -407,7 +407,7 @@ class Detectron2node(object):
             self._last_depth_raw_msg = msg
             self._depth_raw_msg_lock.release()
 
-    def callback_image_raw(self, msg):
+    def callback_image(self, msg):
         if self._image_msg_lock.acquire(False):
             self._last_image_msg = msg
             self._image_msg_lock.release()
